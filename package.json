@@ -1,0 +1,66 @@
+{
+  "name": "daily-trader",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper-first portfolio monitoring and market decision support.",
+  "type": "module",
+  "packageManager": "npm@11.18.0",
+  "engines": {
+    "node": ">=22.13.0 <23",
+    "npm": "11.18.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "build": "npm run build:packages && npm run build:services",
+    "build:packages": "npm run build --workspace=@daily-trader/domain --workspace=@daily-trader/test-utils --workspace=@daily-trader/config --workspace=@daily-trader/observability",
+    "build:services": "npm run build --workspace=@daily-trader/api --workspace=@daily-trader/web --workspace=@daily-trader/market-data-worker",
+    "ci": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build",
+    "dev:api": "npm run build:packages && npm run dev --workspace=@daily-trader/api",
+    "dev:web": "npm run dev --workspace=@daily-trader/web",
+    "dev:worker": "npm run build:packages && npm run dev --workspace=@daily-trader/market-data-worker",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint apps packages workers vitest.config.ts --max-warnings=0",
+    "lint:fix": "eslint apps packages workers vitest.config.ts --fix --max-warnings=0",
+    "pretest": "npm run build:packages",
+    "pretest:coverage": "npm run build:packages",
+    "pretest:watch": "npm run build:packages",
+    "services:check": "npm run build --workspace=@daily-trader/config && node scripts/check-services.mjs",
+    "services:down": "node scripts/compose.mjs down",
+    "services:reset": "node scripts/compose.mjs down --volumes --remove-orphans",
+    "services:stop": "node scripts/compose.mjs stop",
+    "services:up": "node scripts/compose.mjs up -d --wait --wait-timeout 180",
+    "smoke": "npm run build:packages && npm run smoke --workspace=@daily-trader/api && npm run smoke --workspace=@daily-trader/market-data-worker",
+    "start:api": "npm run build && npm run start --workspace=@daily-trader/api",
+    "start:web": "npm run build && npm run start --workspace=@daily-trader/web",
+    "start:worker": "npm run build && npm run start --workspace=@daily-trader/market-data-worker",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "verify:foundation": "node scripts/verify-foundation.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "eslint": "10.7.0",
+    "prettier": "3.9.5",
+    "tsx": "4.23.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.63.0",
+    "vitest": "4.1.10"
+  },
+  "dependencies": {
+    "pg": "8.22.0",
+    "redis": "6.1.0"
+  },
+  "overrides": {
+    "postcss": "8.5.17"
+  }
+}

@@ -1,0 +1,37 @@
+name: daily-trader-local
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.28.2-pg17
+    environment:
+      POSTGRES_DB: daily_trader
+      POSTGRES_PASSWORD: daily_trader_local
+      POSTGRES_USER: daily_trader
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U daily_trader -d daily_trader']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+
+  redis:
+    image: redis:8.2.7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+volumes:
+  postgres-data:
+  redis-data:

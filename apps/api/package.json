@@ -1,0 +1,22 @@
+{
+  "name": "@daily-trader/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "pretest": "npm run build:packages --prefix ../..",
+    "pretest:watch": "npm run build:packages --prefix ../..",
+    "smoke": "npm run build && node dist/smoke.js",
+    "start": "node dist/index.js",
+    "test": "vitest run --root ../.. apps/api",
+    "test:watch": "vitest --root ../.. apps/api",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@daily-trader/config": "*",
+    "@daily-trader/observability": "*",
+    "fastify": "5.10.0"
+  }
+}

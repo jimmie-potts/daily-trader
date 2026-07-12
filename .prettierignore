@@ -1,0 +1,9 @@
+node_modules
+dist
+.next
+coverage
+package-lock.json
+project-docs
+*.pptx
+*.Zone.Identifier
+**/next-env.d.ts

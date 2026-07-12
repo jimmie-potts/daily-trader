@@ -1,0 +1,25 @@
+{
+  "name": "@daily-trader/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "prebuild": "npm run build --workspace=@daily-trader/config --prefix ../.. && node ../../scripts/validate-config.mjs",
+    "predev": "npm run build --workspace=@daily-trader/config --prefix ../.. && node ../../scripts/validate-config.mjs",
+    "prestart": "node ../../scripts/validate-config.mjs",
+    "pretest": "npm run build:packages --prefix ../..",
+    "pretest:watch": "npm run build:packages --prefix ../..",
+    "start": "next start",
+    "test": "vitest run --root ../.. apps/web",
+    "test:watch": "vitest --root ../.. apps/web",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@daily-trader/config": "*",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  }
+}

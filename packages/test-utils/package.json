@@ -1,0 +1,30 @@
+{
+  "name": "@daily-trader/test-utils",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@daily-trader/domain": "*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build:packages --prefix ../..",
+    "pretest:watch": "npm run build:packages --prefix ../..",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --root ../.. packages/test-utils",
+    "test:watch": "vitest --root ../.. packages/test-utils"
+  }
+}

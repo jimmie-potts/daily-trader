@@ -1,0 +1,32 @@
+# Dependencies and generated output
+node_modules/
+dist/
+.next/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.token
+.npmrc
+credentials/
+secrets/
+account-exports/
+account-export*
+
+# Logs and local runtime files
+*.log
+*.pid
+.DS_Store
+
+# IDE and OS metadata
+.idea/
+.vscode/
+*:Zone.Identifier

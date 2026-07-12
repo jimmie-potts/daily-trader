@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@daily-trader/domain": ["../domain/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "vitest.config.ts"]
+}

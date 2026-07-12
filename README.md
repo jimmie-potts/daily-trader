@@ -341,7 +341,7 @@ Strategy success is not measured only by profit and loss. Track latency, data ga
 
 ## Repository status
 
-Phase 1 establishes and validates the development foundation. The next implementation phase connects a paper-compatible AAPL and SPY market feed behind an application-owned adapter, normalizes events, persists one-minute bars, and proves deterministic replay. See [AGENTS.md](./AGENTS.md), the [architecture decisions](./docs/adr/README.md), and the [Phase 1 implementation notes](./user-stories/notes/README.md) before extending the system.
+Phase 1 establishes and validates the development foundation. The next implementation phase connects a paper-compatible AAPL and SPY market feed behind an application-owned adapter, normalizes events, persists one-minute bars, and proves deterministic replay. See [AGENTS.md](./AGENTS.md), the [architecture decisions](./docs/adr/README.md), the [Phase 1 implementation notes](./user-stories/notes/README.md), and the sequenced [Phase 2 user stories](./user-stories/README.md) before extending the system.
 
 ## External documentation
 

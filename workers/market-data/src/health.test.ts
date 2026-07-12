@@ -22,7 +22,10 @@ describe('market-data worker foundation health', () => {
       brokerMode: 'paper',
       event: 'market_data_worker.health',
       executionEnabled: false,
-      marketDataConnection: 'not_configured',
+      marketDataConnection: 'disabled',
+      marketDataMode: 'disabled',
+      provider: 'alpaca',
+      feed: 'iex',
     });
   });
 });

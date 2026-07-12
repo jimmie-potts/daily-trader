@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const LOCAL_DATABASE_URL =
   'postgresql://daily_trader:daily_trader_local@127.0.0.1:5432/daily_trader';
 export const LOCAL_REDIS_URL = 'redis://127.0.0.1:6379';
+export const ALPACA_IEX_WEBSOCKET_URL = 'wss://stream.data.alpaca.markets/v2/iex';
+export const MARKET_DATA_SYMBOLS = Object.freeze(['AAPL', 'SPY'] as const);
 
 const emptyStringToUndefined = (value: unknown): unknown =>
   typeof value === 'string' && value.trim().length === 0 ? undefined : value;
@@ -65,6 +67,35 @@ const redisUrl = z
     'must use the redis or rediss scheme',
   );
 
+const marketDataMode = z.preprocess(
+  emptyStringToUndefined,
+  z.enum(['disabled', 'paper']).default('disabled'),
+);
+
+const alpacaProvider = z.preprocess(
+  emptyStringToUndefined,
+  z.literal('alpaca', { error: 'must be alpaca' }).default('alpaca'),
+);
+
+const iexFeed = z.preprocess(
+  emptyStringToUndefined,
+  z.literal('iex', { error: 'must be iex' }).default('iex'),
+);
+
+const alpacaIexWebsocketUrl = z.preprocess(
+  emptyStringToUndefined,
+  z
+    .literal(ALPACA_IEX_WEBSOCKET_URL, {
+      error: 'must use the approved secure Alpaca IEX websocket endpoint',
+    })
+    .default(ALPACA_IEX_WEBSOCKET_URL),
+);
+
+const phaseTwoMarketDataSymbols = z.preprocess(
+  emptyStringToUndefined,
+  z.literal('AAPL,SPY', { error: 'must be exactly AAPL,SPY' }).default('AAPL,SPY'),
+);
+
 const environmentSchema = z
   .object({
     APP_ENV: z.preprocess(
@@ -75,7 +106,7 @@ const environmentSchema = z
       emptyStringToUndefined,
       z
         .literal('paper', {
-          error: 'must be paper during Phase 1',
+          error: 'must be paper in the current paper-only phase',
         })
         .default('paper'),
     ),
@@ -97,6 +128,22 @@ const environmentSchema = z
     ),
     API_PORT: integerString('3001', 1, 65_535),
     WORKER_HEARTBEAT_INTERVAL_MS: integerString('30000', 1_000, 300_000),
+    MARKET_DATA_MODE: marketDataMode,
+    MARKET_DATA_PROVIDER: alpacaProvider,
+    MARKET_DATA_FEED: iexFeed,
+    MARKET_DATA_WS_URL: alpacaIexWebsocketUrl,
+    MARKET_DATA_API_KEY: optionalString,
+    MARKET_DATA_API_SECRET: optionalString,
+    MARKET_DATA_SYMBOLS: phaseTwoMarketDataSymbols,
+    MARKET_DATA_CONNECTION_TIMEOUT_MS: integerString('10000', 100, 60_000),
+    MARKET_DATA_INACTIVITY_TIMEOUT_MS: integerString('90000', 1_000, 300_000),
+    MARKET_DATA_FRESHNESS_THRESHOLD_MS: integerString('120000', 60_000, 300_000),
+    MARKET_DATA_SHUTDOWN_TIMEOUT_MS: integerString('10000', 100, 30_000),
+    MARKET_DATA_QUEUE_CAPACITY: integerString('256', 1, 10_000),
+    MARKET_DATA_RECONNECT_MAX_ATTEMPTS: integerString('5', 1, 20),
+    MARKET_DATA_RECONNECT_BASE_DELAY_MS: integerString('500', 100, 30_000),
+    MARKET_DATA_RECONNECT_MAX_DELAY_MS: integerString('30000', 100, 120_000),
+    MARKET_DATA_RECONNECT_JITTER_PERCENT: integerString('20', 0, 50),
     DATABASE_URL: z.preprocess(
       (value) => emptyStringToUndefined(value) ?? LOCAL_DATABASE_URL,
       databaseUrl,
@@ -117,8 +164,57 @@ const environmentSchema = z
     if (environment.EXECUTION_ENABLED) {
       context.addIssue({
         code: 'custom',
-        message: 'must remain false during Phase 1',
+        message: 'must remain false while execution is out of scope',
         path: ['EXECUTION_ENABLED'],
+      });
+    }
+
+    const marketDataKeyIsSet = environment.MARKET_DATA_API_KEY !== undefined;
+    const marketDataSecretIsSet = environment.MARKET_DATA_API_SECRET !== undefined;
+
+    if (marketDataKeyIsSet !== marketDataSecretIsSet) {
+      context.addIssue({
+        code: 'custom',
+        message: 'API key and secret must be provided together',
+        path: ['MARKET_DATA_API_KEY'],
+      });
+    } else if (environment.MARKET_DATA_MODE === 'paper' && !marketDataKeyIsSet) {
+      context.addIssue({
+        code: 'custom',
+        message: 'API key and secret are required in paper mode',
+        path: ['MARKET_DATA_API_KEY'],
+      });
+    }
+
+    if (
+      environment.MARKET_DATA_CONNECTION_TIMEOUT_MS >= environment.MARKET_DATA_INACTIVITY_TIMEOUT_MS
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be less than MARKET_DATA_INACTIVITY_TIMEOUT_MS',
+        path: ['MARKET_DATA_CONNECTION_TIMEOUT_MS'],
+      });
+    }
+
+    if (
+      environment.MARKET_DATA_RECONNECT_BASE_DELAY_MS >
+      environment.MARKET_DATA_RECONNECT_MAX_DELAY_MS
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be less than or equal to MARKET_DATA_RECONNECT_MAX_DELAY_MS',
+        path: ['MARKET_DATA_RECONNECT_BASE_DELAY_MS'],
+      });
+    }
+
+    const maximumReconnectDelayWithJitter =
+      environment.MARKET_DATA_RECONNECT_MAX_DELAY_MS *
+      (100 + environment.MARKET_DATA_RECONNECT_JITTER_PERCENT);
+    if (maximumReconnectDelayWithJitter > environment.MARKET_DATA_INACTIVITY_TIMEOUT_MS * 100) {
+      context.addIssue({
+        code: 'custom',
+        message: 'including jitter must be less than or equal to MARKET_DATA_INACTIVITY_TIMEOUT_MS',
+        path: ['MARKET_DATA_RECONNECT_MAX_DELAY_MS'],
       });
     }
 
@@ -153,6 +249,31 @@ const environmentSchema = z
 
 export type EnvironmentMap = Readonly<Record<string, string | undefined>>;
 export type AppEnvironment = 'local' | 'test' | 'staging' | 'production';
+export type MarketDataMode = 'disabled' | 'paper';
+export type MarketDataProvider = 'alpaca';
+export type MarketDataFeed = 'iex';
+export type MarketDataSymbol = (typeof MARKET_DATA_SYMBOLS)[number];
+
+export interface MarketDataConfiguration {
+  readonly mode: MarketDataMode;
+  readonly provider: MarketDataProvider;
+  readonly feed: MarketDataFeed;
+  readonly websocketUrl: typeof ALPACA_IEX_WEBSOCKET_URL;
+  readonly apiKey: string | undefined;
+  readonly apiSecret: string | undefined;
+  readonly symbols: typeof MARKET_DATA_SYMBOLS;
+  readonly connectionTimeoutMs: number;
+  readonly inactivityTimeoutMs: number;
+  readonly freshnessThresholdMs: number;
+  readonly shutdownTimeoutMs: number;
+  readonly queueCapacity: number;
+  readonly reconnect: {
+    readonly maxAttempts: number;
+    readonly baseDelayMs: number;
+    readonly maxDelayMs: number;
+    readonly jitterPercent: number;
+  };
+}
 
 export interface ProviderConfiguration {
   readonly baseUrl: string | undefined;
@@ -174,6 +295,7 @@ export interface ApplicationConfig {
   readonly worker: {
     readonly heartbeatIntervalMs: number;
   };
+  readonly marketData: MarketDataConfiguration;
   readonly trading: {
     readonly brokerMode: 'paper';
     readonly executionEnabled: false;
@@ -283,9 +405,29 @@ export function loadConfig(environment: EnvironmentMap = process.env): Applicati
     worker: Object.freeze({
       heartbeatIntervalMs: parsed.WORKER_HEARTBEAT_INTERVAL_MS,
     }),
+    marketData: Object.freeze({
+      mode: parsed.MARKET_DATA_MODE,
+      provider: parsed.MARKET_DATA_PROVIDER,
+      feed: parsed.MARKET_DATA_FEED,
+      websocketUrl: parsed.MARKET_DATA_WS_URL,
+      apiKey: parsed.MARKET_DATA_API_KEY,
+      apiSecret: parsed.MARKET_DATA_API_SECRET,
+      symbols: MARKET_DATA_SYMBOLS,
+      connectionTimeoutMs: parsed.MARKET_DATA_CONNECTION_TIMEOUT_MS,
+      inactivityTimeoutMs: parsed.MARKET_DATA_INACTIVITY_TIMEOUT_MS,
+      freshnessThresholdMs: parsed.MARKET_DATA_FRESHNESS_THRESHOLD_MS,
+      shutdownTimeoutMs: parsed.MARKET_DATA_SHUTDOWN_TIMEOUT_MS,
+      queueCapacity: parsed.MARKET_DATA_QUEUE_CAPACITY,
+      reconnect: Object.freeze({
+        maxAttempts: parsed.MARKET_DATA_RECONNECT_MAX_ATTEMPTS,
+        baseDelayMs: parsed.MARKET_DATA_RECONNECT_BASE_DELAY_MS,
+        maxDelayMs: parsed.MARKET_DATA_RECONNECT_MAX_DELAY_MS,
+        jitterPercent: parsed.MARKET_DATA_RECONNECT_JITTER_PERCENT,
+      }),
+    }),
     trading: Object.freeze({
       brokerMode: parsed.BROKER_MODE,
-      // The schema rejects true, so narrowing here records the Phase 1 invariant.
+      // The schema rejects true, so narrowing here records the paper-only invariant.
       executionEnabled: parsed.EXECUTION_ENABLED as false,
     }),
     services: Object.freeze({
@@ -338,6 +480,24 @@ export interface SafeConfigDiagnostics {
   readonly telemetryExporter: 'console' | 'none';
   readonly brokerMode: 'paper';
   readonly executionEnabled: false;
+  readonly marketData: {
+    readonly mode: MarketDataMode;
+    readonly provider: MarketDataProvider;
+    readonly feed: MarketDataFeed;
+    readonly symbols: typeof MARKET_DATA_SYMBOLS;
+    readonly credentialsConfigured: boolean;
+    readonly connectionTimeoutMs: number;
+    readonly inactivityTimeoutMs: number;
+    readonly freshnessThresholdMs: number;
+    readonly shutdownTimeoutMs: number;
+    readonly queueCapacity: number;
+    readonly reconnect: {
+      readonly maxAttempts: number;
+      readonly baseDelayMs: number;
+      readonly maxDelayMs: number;
+      readonly jitterPercent: number;
+    };
+  };
   readonly services: {
     readonly database: SafeEndpointMetadata;
     readonly redis: SafeEndpointMetadata;
@@ -358,6 +518,20 @@ export function getSafeConfigDiagnostics(config: ApplicationConfig): SafeConfigD
     telemetryExporter: config.runtime.telemetryExporter,
     brokerMode: config.trading.brokerMode,
     executionEnabled: config.trading.executionEnabled,
+    marketData: Object.freeze({
+      mode: config.marketData.mode,
+      provider: config.marketData.provider,
+      feed: config.marketData.feed,
+      symbols: config.marketData.symbols,
+      credentialsConfigured:
+        config.marketData.apiKey !== undefined && config.marketData.apiSecret !== undefined,
+      connectionTimeoutMs: config.marketData.connectionTimeoutMs,
+      inactivityTimeoutMs: config.marketData.inactivityTimeoutMs,
+      freshnessThresholdMs: config.marketData.freshnessThresholdMs,
+      shutdownTimeoutMs: config.marketData.shutdownTimeoutMs,
+      queueCapacity: config.marketData.queueCapacity,
+      reconnect: Object.freeze({ ...config.marketData.reconnect }),
+    }),
     services: Object.freeze({
       database: safeEndpointMetadata(config.services.database.url),
       redis: safeEndpointMetadata(config.services.redis.url),

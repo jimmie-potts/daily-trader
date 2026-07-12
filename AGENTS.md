@@ -10,19 +10,23 @@ The project starts with market monitoring and paper trading. Do not implement or
 
 ## Current project state
 
-Phase 1 is a TypeScript npm-workspace monorepo on Node.js 22 with npm 11.18.0. It contains a Next.js web shell, Fastify health API, long-running market-data worker shell, shared domain/configuration/observability packages, PostgreSQL/TimescaleDB and Redis local services, and CI quality gates. The accepted choices and their consequences are recorded in `docs/adr/`.
+Phases 1 and 2 form a TypeScript npm-workspace monorepo on Node.js 22 with npm 11.18.0. The repository contains Next.js and Fastify shells; shared domain, market-data, configuration, observability, and test packages; a long-running market-data worker boundary; pinned PostgreSQL/TimescaleDB and Redis services; versioned migrations; and CI quality gates. Accepted choices and their consequences are recorded in `docs/adr/`.
 
-No market feed, portfolio synchronization, signal, order intent, broker connection, or AI research behavior exists yet. The process shells must remain paper-only with execution disabled until their later phases are explicitly implemented.
+Phase 2 implements the narrow market-data slice: provider-supplied one-minute bars for AAPL at `XNAS` and SPY at `ARCX`, Alpaca IEX real-time single-exchange/zero-delay scope, regular core sessions from the embedded 2026-2028 NYSE snapshot, exact normalization, bounded adapter recovery, Redis delivery, durable canonical persistence, portable replay, and terminal status. Market data is disabled by default and the credential-gated provider smoke is separate from CI. P2-11 integrated service/restart verification remains pending wherever the Docker Linux engine is unavailable; do not report the phase exit as verified until both `npm run verify:phase2` and the credential-gated `npm run market-data:provider-smoke` have completed successfully.
+
+No portfolio synchronization, signal, alert, order intent, broker execution, AI research, additional symbol, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no later phase is authorized implicitly.
 
 ## Repository structure and commands
 
 - `apps/api/`: Fastify health API and smoke check
 - `apps/web/`: Next.js foundation status page
-- `workers/market-data/`: observable worker shell without a provider connection
+- `workers/market-data/`: provider, recovery, Redis, persistence, replay, metrics, and terminal-status adapters
 - `packages/domain/`: framework- and vendor-independent domain primitives
+- `packages/market-data/`: provider-neutral event, calendar, freshness, ordering, and adapter contracts
 - `packages/config/`: validated configuration and safe diagnostics
 - `packages/observability/`: logging, metrics, tracing, and redaction
 - `packages/test-utils/`: deterministic test helpers
+- `infrastructure/postgres/migrations/`: versioned application-owned market-data schema
 - `infrastructure/`: pinned local services and operating notes
 - `docs/adr/`: accepted architecture decisions
 - `user-stories/notes/`: story validation and handoff notes
@@ -36,7 +40,12 @@ Use the root commands rather than bypassing workspace checks:
 - `npm run build`: build packages and all process shells
 - `npm run ci`: run the complete local CI equivalent
 - `npm run services:up`, `npm run services:check`, `npm run services:stop`: operate local dependencies
+- `npm run market-data:migrate`: apply or verify non-destructive market-data migrations
+- `npm run market-data:recording:verify`, `npm run market-data:replay`: verify and replay the synthetic portable session
+- `npm run market-data:status`: render persisted AAPL/SPY bar-close and operational status
+- `npm run market-data:provider-smoke`: run the explicit credential-gated Alpaca smoke; never claim it passed unless it ran
 - `npm run verify:foundation`: run CI, local-service checks, and process smoke checks
+- `npm run verify:phase2`: run the credential-free Phase 2 fixture, service, replay, and status handoff
 
 `npm run services:reset` deletes local volumes and must only be run intentionally. When new tooling establishes or changes commands, update this file and `README.md` in the same change.
 
@@ -264,7 +273,7 @@ Before handing off:
 Unless the user reprioritizes the roadmap, build the first vertical slice in this order:
 
 1. Maintain the established TypeScript monorepo, quality checks, configuration validation, PostgreSQL, and Redis foundation.
-2. Next, stream AAPL and SPY from a paper-compatible provider into the terminal worker.
+2. Stream AAPL and SPY from a paper-compatible provider into the terminal worker.
 3. Normalize and persist one-minute bars with connection and freshness metrics.
 4. Display latest prices, timestamps, and stream health.
 5. Implement one versioned breakout-plus-volume signal.
@@ -274,4 +283,4 @@ Unless the user reprioritizes the roadmap, build the first vertical slice in thi
 9. Add portfolio-aware alerts.
 10. Introduce order intents only after the preceding behavior is stable.
 
-Do not begin live execution, additional asset classes, sentiment analysis, or complex strategy work while this vertical slice remains incomplete.
+Phase 2 completes the market-data foundation in steps 1-4 and the reusable replay substrate in step 7; it does not implement the intervening signal work or authorize later behavior. Do not begin live execution, additional asset classes, sentiment analysis, or complex strategy work without an explicitly scoped later phase.

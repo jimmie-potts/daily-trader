@@ -16,6 +16,14 @@
   },
   "dependencies": {
     "@daily-trader/config": "*",
-    "@daily-trader/observability": "*"
+    "@daily-trader/domain": "*",
+    "@daily-trader/market-data": "*",
+    "@daily-trader/observability": "*",
+    "pg": "8.22.0",
+    "redis": "6.1.0",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
   }
 }

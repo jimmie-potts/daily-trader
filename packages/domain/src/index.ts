@@ -1,5 +1,10 @@
 export { createCurrencyCode, type CurrencyCode } from './currency.js';
-export { createExactDecimal, type ExactDecimal } from './exact-decimal.js';
+export {
+  compareExactDecimals,
+  createExactDecimal,
+  isPositiveExactDecimal,
+  type ExactDecimal,
+} from './exact-decimal.js';
 export {
   createMoney,
   createPrice,

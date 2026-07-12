@@ -17,6 +17,8 @@ Callers must not convert them to `number` for financial calculations. Before
 calculations are introduced, the project must adopt and document a reviewed
 decimal implementation, precision policy, and operation-specific rounding
 rules. Construction validates representation only; it does not round values.
+`compareExactDecimals` performs only sign/digit comparison so boundaries can
+validate positivity and ordering without introducing arithmetic.
 
 `Money` is an amount in one currency. `Price` is an amount in one currency per
 unit of an identified instrument. `Quantity` is an amount of an identified

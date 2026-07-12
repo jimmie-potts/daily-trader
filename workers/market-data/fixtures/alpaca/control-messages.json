@@ -1,0 +1,16 @@
+[
+  { "T": "success", "msg": "connected" },
+  { "T": "success", "msg": "authenticated" },
+  {
+    "T": "subscription",
+    "trades": [],
+    "quotes": [],
+    "bars": ["AAPL", "SPY"],
+    "updatedBars": [],
+    "dailyBars": [],
+    "statuses": [],
+    "lulds": [],
+    "corrections": [],
+    "cancelErrors": []
+  }
+]

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ALPACA_IEX_WEBSOCKET_URL,
   ConfigurationError,
   LOCAL_DATABASE_URL,
   LOCAL_REDIS_URL,
+  MARKET_DATA_SYMBOLS,
   getSafeConfigDiagnostics,
   loadConfig,
   loadOptionalEnvironmentFile,
@@ -30,6 +32,26 @@ describe('loadConfig', () => {
       },
       worker: {
         heartbeatIntervalMs: 30_000,
+      },
+      marketData: {
+        mode: 'disabled',
+        provider: 'alpaca',
+        feed: 'iex',
+        websocketUrl: ALPACA_IEX_WEBSOCKET_URL,
+        apiKey: undefined,
+        apiSecret: undefined,
+        symbols: ['AAPL', 'SPY'],
+        connectionTimeoutMs: 10_000,
+        inactivityTimeoutMs: 90_000,
+        freshnessThresholdMs: 120_000,
+        shutdownTimeoutMs: 10_000,
+        queueCapacity: 256,
+        reconnect: {
+          maxAttempts: 5,
+          baseDelayMs: 500,
+          maxDelayMs: 30_000,
+          jitterPercent: 20,
+        },
       },
       trading: {
         brokerMode: 'paper',
@@ -61,6 +83,22 @@ describe('loadConfig', () => {
       TELEMETRY_EXPORTER: 'console',
       API_PORT: '3101',
       WORKER_HEARTBEAT_INTERVAL_MS: '1500',
+      MARKET_DATA_MODE: 'paper',
+      MARKET_DATA_PROVIDER: 'alpaca',
+      MARKET_DATA_FEED: 'iex',
+      MARKET_DATA_WS_URL: ALPACA_IEX_WEBSOCKET_URL,
+      MARKET_DATA_API_KEY: 'market-data-key',
+      MARKET_DATA_API_SECRET: 'market-data-secret',
+      MARKET_DATA_SYMBOLS: 'AAPL,SPY',
+      MARKET_DATA_CONNECTION_TIMEOUT_MS: '2000',
+      MARKET_DATA_INACTIVITY_TIMEOUT_MS: '60000',
+      MARKET_DATA_FRESHNESS_THRESHOLD_MS: '180000',
+      MARKET_DATA_SHUTDOWN_TIMEOUT_MS: '5000',
+      MARKET_DATA_QUEUE_CAPACITY: '32',
+      MARKET_DATA_RECONNECT_MAX_ATTEMPTS: '3',
+      MARKET_DATA_RECONNECT_BASE_DELAY_MS: '250',
+      MARKET_DATA_RECONNECT_MAX_DELAY_MS: '5000',
+      MARKET_DATA_RECONNECT_JITTER_PERCENT: '10',
       PAPER_BROKER_BASE_URL: 'https://paper.example.invalid',
       PAPER_BROKER_API_KEY: 'paper-key-value',
       PAPER_BROKER_API_SECRET: 'paper-secret-value',
@@ -73,7 +111,37 @@ describe('loadConfig', () => {
     expect(config.runtime).toEqual({ logLevel: 'debug', telemetryExporter: 'console' });
     expect(config.api.port).toBe(3_101);
     expect(config.worker.heartbeatIntervalMs).toBe(1_500);
+    expect(config.marketData).toEqual({
+      mode: 'paper',
+      provider: 'alpaca',
+      feed: 'iex',
+      websocketUrl: ALPACA_IEX_WEBSOCKET_URL,
+      apiKey: 'market-data-key',
+      apiSecret: 'market-data-secret',
+      symbols: ['AAPL', 'SPY'],
+      connectionTimeoutMs: 2_000,
+      inactivityTimeoutMs: 60_000,
+      freshnessThresholdMs: 180_000,
+      shutdownTimeoutMs: 5_000,
+      queueCapacity: 32,
+      reconnect: {
+        maxAttempts: 3,
+        baseDelayMs: 250,
+        maxDelayMs: 5_000,
+        jitterPercent: 10,
+      },
+    });
     expect(config.providers.paperBroker.apiKey).toBe('paper-key-value');
+  });
+
+  it('freezes market-data configuration and the exact Phase 2 subscription scope', () => {
+    const config = loadConfig({});
+
+    expect(config.marketData.symbols).toBe(MARKET_DATA_SYMBOLS);
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.marketData)).toBe(true);
+    expect(Object.isFrozen(config.marketData.symbols)).toBe(true);
+    expect(Object.isFrozen(config.marketData.reconnect)).toBe(true);
   });
 
   it('requires service locations outside local and test environments', () => {
@@ -106,8 +174,8 @@ describe('loadConfig', () => {
   });
 
   it.each([
-    ['EXECUTION_ENABLED', 'true', 'must remain false during Phase 1'],
-    ['BROKER_MODE', 'live', 'must be paper during Phase 1'],
+    ['EXECUTION_ENABLED', 'true', 'must remain false while execution is out of scope'],
+    ['BROKER_MODE', 'live', 'must be paper in the current paper-only phase'],
     ['DATABASE_URL', 'https://database.example.invalid', 'postgres'],
     ['REDIS_URL', 'postgresql://localhost/redis', 'redis'],
     ['DATABASE_CONNECTION_TIMEOUT_MS', 'forever', 'milliseconds'],
@@ -120,7 +188,114 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ [setting]: value })).toThrowError(expectedMessage);
   });
 
-  it('keeps live settings separate and rejects them during Phase 1', () => {
+  it.each([
+    ['MARKET_DATA_MODE', 'live'],
+    ['MARKET_DATA_PROVIDER', 'polygon'],
+    ['MARKET_DATA_FEED', 'sip'],
+    ['MARKET_DATA_SYMBOLS', 'SPY,AAPL'],
+    ['MARKET_DATA_SYMBOLS', 'AAPL,SPY,QQQ'],
+    ['MARKET_DATA_WS_URL', 'ws://stream.data.alpaca.markets/v2/iex'],
+    ['MARKET_DATA_WS_URL', 'wss://stream.data.sandbox.alpaca.markets/v2/iex'],
+    ['MARKET_DATA_WS_URL', 'wss://stream.data.alpaca.markets/v2/sip'],
+    ['MARKET_DATA_WS_URL', `${ALPACA_IEX_WEBSOCKET_URL}?fallback=sip`],
+  ])('rejects unsupported market-data identity or scope in %s', (setting, value) => {
+    expect(() => loadConfig({ [setting]: value })).toThrowError(ConfigurationError);
+  });
+
+  it('requires a complete credential pair only when paper mode is enabled', () => {
+    expect(() => loadConfig({ MARKET_DATA_MODE: 'paper' })).toThrowError(
+      'MARKET_DATA_API_KEY: API key and secret are required in paper mode',
+    );
+
+    const secret = 'market-data-secret-must-not-leak';
+    try {
+      loadConfig({ MARKET_DATA_MODE: 'paper', MARKET_DATA_API_SECRET: secret });
+      throw new Error('expected loadConfig to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigurationError);
+      expect(String(error)).toContain('MARKET_DATA_API_KEY');
+      expect(String(error)).not.toContain(secret);
+    }
+
+    expect(() =>
+      loadConfig({
+        MARKET_DATA_MODE: 'paper',
+        MARKET_DATA_API_KEY: 'paper-market-key',
+        MARKET_DATA_API_SECRET: 'paper-market-secret',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a partial credential pair even while the feed is disabled', () => {
+    expect(() => loadConfig({ MARKET_DATA_API_KEY: 'unused-key' })).toThrowError(
+      'API key and secret must be provided together',
+    );
+  });
+
+  it.each([
+    ['MARKET_DATA_CONNECTION_TIMEOUT_MS', '99'],
+    ['MARKET_DATA_INACTIVITY_TIMEOUT_MS', '999'],
+    ['MARKET_DATA_FRESHNESS_THRESHOLD_MS', '59999'],
+    ['MARKET_DATA_SHUTDOWN_TIMEOUT_MS', '99'],
+    ['MARKET_DATA_QUEUE_CAPACITY', '0'],
+    ['MARKET_DATA_QUEUE_CAPACITY', '10001'],
+    ['MARKET_DATA_RECONNECT_MAX_ATTEMPTS', '0'],
+    ['MARKET_DATA_RECONNECT_MAX_ATTEMPTS', '21'],
+    ['MARKET_DATA_RECONNECT_BASE_DELAY_MS', '99'],
+    ['MARKET_DATA_RECONNECT_MAX_DELAY_MS', '120001'],
+    ['MARKET_DATA_RECONNECT_JITTER_PERCENT', '51'],
+  ])('rejects out-of-bounds %s', (setting, value) => {
+    expect(() => loadConfig({ [setting]: value })).toThrowError(ConfigurationError);
+  });
+
+  it.each([
+    [
+      {
+        MARKET_DATA_CONNECTION_TIMEOUT_MS: '10000',
+        MARKET_DATA_INACTIVITY_TIMEOUT_MS: '10000',
+      },
+      'MARKET_DATA_CONNECTION_TIMEOUT_MS',
+    ],
+    [
+      {
+        MARKET_DATA_RECONNECT_BASE_DELAY_MS: '30000',
+        MARKET_DATA_RECONNECT_MAX_DELAY_MS: '20000',
+      },
+      'MARKET_DATA_RECONNECT_BASE_DELAY_MS',
+    ],
+    [
+      {
+        MARKET_DATA_INACTIVITY_TIMEOUT_MS: '90000',
+        MARKET_DATA_RECONNECT_MAX_DELAY_MS: '100000',
+      },
+      'MARKET_DATA_RECONNECT_MAX_DELAY_MS',
+    ],
+    [
+      {
+        MARKET_DATA_INACTIVITY_TIMEOUT_MS: '90000',
+        MARKET_DATA_RECONNECT_MAX_DELAY_MS: '80000',
+        MARKET_DATA_RECONNECT_JITTER_PERCENT: '50',
+      },
+      'MARKET_DATA_RECONNECT_MAX_DELAY_MS',
+    ],
+  ])('rejects unsafe cross-field market-data bounds', (environment, expectedSetting) => {
+    expect(() => loadConfig(environment)).toThrowError(expectedSetting);
+  });
+
+  it('fails invalid market-data configuration before a connector can be created', () => {
+    let connectorCreated = false;
+    const createConnector = (): void => {
+      connectorCreated = true;
+    };
+
+    expect(() => {
+      loadConfig({ MARKET_DATA_MODE: 'paper' });
+      createConnector();
+    }).toThrowError(ConfigurationError);
+    expect(connectorCreated).toBe(false);
+  });
+
+  it('keeps live settings separate and rejects them in the current paper-only phase', () => {
     const liveSecret = 'live-secret-must-stay-private';
 
     try {
@@ -143,6 +318,9 @@ describe('safe diagnostics', () => {
     const sensitiveValues = [
       'database-password',
       'redis-password',
+      ALPACA_IEX_WEBSOCKET_URL,
+      'market-data-key',
+      'market-data-secret',
       'paper-key',
       'paper-secret',
       'account-98765',
@@ -150,6 +328,8 @@ describe('safe diagnostics', () => {
     const config = loadConfig({
       DATABASE_URL: 'postgresql://daily_trader:database-password@db.local:5432/daily_trader',
       REDIS_URL: 'redis://default:redis-password@cache.local:6379',
+      MARKET_DATA_API_KEY: 'market-data-key',
+      MARKET_DATA_API_SECRET: 'market-data-secret',
       PAPER_BROKER_BASE_URL: 'https://paper.example.invalid/path?token=private',
       PAPER_BROKER_API_KEY: 'paper-key',
       PAPER_BROKER_API_SECRET: 'paper-secret',
@@ -160,10 +340,42 @@ describe('safe diagnostics', () => {
 
     expect(serializedDiagnostics).toContain('"environment":"local"');
     expect(serializedDiagnostics).toContain('"host":"db.local"');
+    expect(serializedDiagnostics).toContain('"mode":"disabled"');
+    expect(serializedDiagnostics).toContain('"provider":"alpaca"');
+    expect(serializedDiagnostics).toContain('"feed":"iex"');
+    expect(serializedDiagnostics).toContain('"symbols":["AAPL","SPY"]');
     expect(serializedDiagnostics).toContain('"credentialsConfigured":true');
     for (const sensitiveValue of sensitiveValues) {
       expect(serializedDiagnostics).not.toContain(sensitiveValue);
     }
+  });
+
+  it('reports frozen nonsecret market-data bounds without an endpoint', () => {
+    const diagnostics = getSafeConfigDiagnostics(loadConfig({}));
+
+    expect(diagnostics.marketData).toEqual({
+      mode: 'disabled',
+      provider: 'alpaca',
+      feed: 'iex',
+      symbols: ['AAPL', 'SPY'],
+      credentialsConfigured: false,
+      connectionTimeoutMs: 10_000,
+      inactivityTimeoutMs: 90_000,
+      freshnessThresholdMs: 120_000,
+      shutdownTimeoutMs: 10_000,
+      queueCapacity: 256,
+      reconnect: {
+        maxAttempts: 5,
+        baseDelayMs: 500,
+        maxDelayMs: 30_000,
+        jitterPercent: 20,
+      },
+    });
+    expect(Object.isFrozen(diagnostics.marketData)).toBe(true);
+    expect(Object.isFrozen(diagnostics.marketData.reconnect)).toBe(true);
+    expect(diagnostics.marketData).not.toHaveProperty('websocketUrl');
+    expect(diagnostics.marketData).not.toHaveProperty('apiKey');
+    expect(diagnostics.marketData).not.toHaveProperty('apiSecret');
   });
 
   it('redacts credential-like environment fields', () => {
@@ -171,12 +383,18 @@ describe('safe diagnostics', () => {
       redactEnvironment({
         APP_ENV: 'local',
         DATABASE_URL: 'postgresql://user:secret@localhost/database',
+        MARKET_DATA_WS_URL: ALPACA_IEX_WEBSOCKET_URL,
+        MARKET_DATA_API_KEY: 'market-key',
+        MARKET_DATA_API_SECRET: 'market-secret',
         PAPER_BROKER_ACCOUNT_ID: 'account-123',
         PUBLIC_LABEL: 'visible',
       }),
     ).toEqual({
       APP_ENV: 'local',
       DATABASE_URL: '[REDACTED]',
+      MARKET_DATA_WS_URL: '[REDACTED]',
+      MARKET_DATA_API_KEY: '[REDACTED]',
+      MARKET_DATA_API_SECRET: '[REDACTED]',
       PAPER_BROKER_ACCOUNT_ID: '[REDACTED]',
       PUBLIC_LABEL: 'visible',
     });

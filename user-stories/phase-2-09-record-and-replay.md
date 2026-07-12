@@ -15,7 +15,7 @@ As a strategy developer, I want recorded normalized sessions replayed through pr
 
 ## Validation
 
-- Record a sanitized fixture session containing AAPL/SPY bars plus duplicate, late, out-of-order, and gap cases.
+- Record a sanitized fixture session containing AAPL/SPY bars plus correction, late, out-of-order, and gap cases; exercise duplicate/redelivery semantics by replaying the same verified canonical event rather than placing duplicate event IDs in the portable recording.
 - Export and verify its portable recording, replay it twice into separate clean targets and again into existing state, then compare canonical queries and checksums byte-for-byte where serialization is specified.
 - Test corrupt, truncated, and unsupported-version recordings and prove all automated replay tests are credential-free.
 

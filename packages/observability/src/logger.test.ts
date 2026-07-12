@@ -33,6 +33,7 @@ describe('createLogger', () => {
         providerPayload: { price: '10', symbol: 'AAPL' },
         providerResponse: { raw: 'sensitive' },
         rawPayload: { account: 'sensitive' },
+        websocketUrl: 'wss://user:secret@provider.example/private',
       }),
     ).toEqual({
       accountId: '[REDACTED]',
@@ -41,6 +42,7 @@ describe('createLogger', () => {
       providerPayload: '[REDACTED]',
       providerResponse: '[REDACTED]',
       rawPayload: '[REDACTED]',
+      websocketUrl: '[REDACTED]',
     });
   });
 });

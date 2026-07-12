@@ -1,0 +1,6 @@
+[
+  { "T": "b", "S": "AAPL", "o": 189.5, "h": 190, "l": 189, "c": 189.75 },
+  { "T": "subscription", "bars": ["AAPL", "SPY"], "quotes": ["AAPL"] },
+  { "T": "error", "msg": "missing code" },
+  { "S": "AAPL" }
+]

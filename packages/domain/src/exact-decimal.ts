@@ -31,3 +31,52 @@ export function createExactDecimal(value: unknown): ExactDecimal {
 
   return candidate as ExactDecimal;
 }
+
+function absoluteParts(value: ExactDecimal): readonly [integer: string, fraction: string] {
+  const unsigned = value.startsWith('-') ? value.slice(1) : value;
+  const separator = unsigned.indexOf('.');
+  return separator === -1
+    ? [unsigned, '']
+    : [unsigned.slice(0, separator), unsigned.slice(separator + 1)];
+}
+
+function compareMagnitude(left: ExactDecimal, right: ExactDecimal): -1 | 0 | 1 {
+  const [leftInteger, leftFraction] = absoluteParts(left);
+  const [rightInteger, rightFraction] = absoluteParts(right);
+
+  if (leftInteger.length !== rightInteger.length) {
+    return leftInteger.length < rightInteger.length ? -1 : 1;
+  }
+  if (leftInteger !== rightInteger) {
+    return leftInteger < rightInteger ? -1 : 1;
+  }
+
+  const fractionLength = Math.max(leftFraction.length, rightFraction.length);
+  const comparableLeft = leftFraction.padEnd(fractionLength, '0');
+  const comparableRight = rightFraction.padEnd(fractionLength, '0');
+  if (comparableLeft === comparableRight) {
+    return 0;
+  }
+  return comparableLeft < comparableRight ? -1 : 1;
+}
+
+/**
+ * Compares already-validated decimal values by sign and decimal digits only.
+ * This deliberately provides no arithmetic, precision, or rounding behavior.
+ */
+export function compareExactDecimals(left: ExactDecimal, right: ExactDecimal): -1 | 0 | 1 {
+  const leftIsNegative = left.startsWith('-');
+  const rightIsNegative = right.startsWith('-');
+
+  if (leftIsNegative !== rightIsNegative) {
+    return leftIsNegative ? -1 : 1;
+  }
+
+  const magnitude = compareMagnitude(left, right);
+  return leftIsNegative ? (magnitude === 0 ? 0 : magnitude === 1 ? -1 : 1) : magnitude;
+}
+
+/** True only for exact values greater than zero. */
+export function isPositiveExactDecimal(value: ExactDecimal): boolean {
+  return value !== '0' && !value.startsWith('-');
+}

@@ -8,6 +8,7 @@ coverage/
 # Local configuration and secrets
 .env
 .env.*
+*.env
 !.env.example
 *.pem
 *.key

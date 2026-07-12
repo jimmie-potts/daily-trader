@@ -6,7 +6,7 @@ As a data consumer, I want provider bars translated losslessly into application-
 
 ## Acceptance Criteria
 
-- A pure provider-boundary decoder validates message shape, symbol, event kind, entitlement metadata, source identifiers, interval, timestamps, and numeric tokens before constructing an application event.
+- A pure provider-boundary decoder validates every payload-contained field: message shape, symbol, event kind, provider timestamp, and numeric tokens. Before constructing an application event, the adapter boundary also validates source/feed/entitlement, interval, and currency from the immutable endpoint and acknowledged subscription context because Alpaca bar messages do not repeat that metadata.
 - JSON numeric lexemes are captured and canonicalized without binary floating-point conversion. Nonfinite, exponent, negative-volume, missing, or otherwise invalid values are rejected according to P2-01.
 - Prices must be positive, volume must be nonnegative, and `low <= open/close <= high` must hold using the approved exact comparison policy.
 - AAPL and SPY map to the approved `InstrumentId` venues; unknown symbols, intervals, currencies, and event kinds are rejected or explicitly ignored with a classified reason.

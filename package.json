@@ -15,8 +15,9 @@
     "workers/*"
   ],
   "scripts": {
+    "audit:dependencies": "npm audit --offline --audit-level=high",
     "build": "npm run build:packages && npm run build:services",
-    "build:packages": "npm run build --workspace=@daily-trader/domain --workspace=@daily-trader/test-utils --workspace=@daily-trader/config --workspace=@daily-trader/observability",
+    "build:packages": "npm run build --workspace=@daily-trader/domain --workspace=@daily-trader/market-data --workspace=@daily-trader/test-utils --workspace=@daily-trader/config --workspace=@daily-trader/observability",
     "build:services": "npm run build --workspace=@daily-trader/api --workspace=@daily-trader/web --workspace=@daily-trader/market-data-worker",
     "ci": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build",
     "dev:api": "npm run build:packages && npm run dev --workspace=@daily-trader/api",
@@ -26,6 +27,11 @@
     "format:check": "prettier --check .",
     "lint": "eslint apps packages workers vitest.config.ts --max-warnings=0",
     "lint:fix": "eslint apps packages workers vitest.config.ts --fix --max-warnings=0",
+    "market-data:migrate": "npm run build --workspace=@daily-trader/config && node scripts/migrate-market-data.mjs",
+    "market-data:provider-smoke": "npm run build:packages && npm run build --workspace=@daily-trader/market-data-worker && node workers/market-data/dist/provider-smoke.js",
+    "market-data:recording:verify": "npm run build:packages && npm run build --workspace=@daily-trader/market-data-worker && node workers/market-data/dist/market-data-cli.js recording:verify",
+    "market-data:replay": "npm run build:packages && npm run build --workspace=@daily-trader/market-data-worker && node workers/market-data/dist/market-data-cli.js replay",
+    "market-data:status": "npm run build:packages && npm run build --workspace=@daily-trader/market-data-worker && node workers/market-data/dist/market-data-cli.js status",
     "pretest": "npm run build:packages",
     "pretest:coverage": "npm run build:packages",
     "pretest:watch": "npm run build:packages",
@@ -35,6 +41,7 @@
     "services:stop": "node scripts/compose.mjs stop",
     "services:up": "node scripts/compose.mjs up -d --wait --wait-timeout 180",
     "smoke": "npm run build:packages && npm run smoke --workspace=@daily-trader/api && npm run smoke --workspace=@daily-trader/market-data-worker",
+    "phase2:service-verify": "npm run build:packages && npm run build --workspace=@daily-trader/market-data-worker && node workers/market-data/dist/phase2-verify.js",
     "start:api": "npm run build && npm run start --workspace=@daily-trader/api",
     "start:web": "npm run build && npm run start --workspace=@daily-trader/web",
     "start:worker": "npm run build && npm run start --workspace=@daily-trader/market-data-worker",
@@ -42,10 +49,12 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "verify:foundation": "node scripts/verify-foundation.mjs"
+    "verify:foundation": "node scripts/verify-foundation.mjs",
+    "verify:phase2": "node scripts/verify-phase2.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "@types/pg": "8.20.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitest/coverage-v8": "4.1.10",

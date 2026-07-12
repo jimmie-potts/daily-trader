@@ -23,7 +23,7 @@ export interface LoggerOptions {
 
 const REDACTED = '[REDACTED]';
 const SENSITIVE_KEY =
-  /(?:account|api.?key|authorization|broker.*(?:body|payload|response)|certificate|cookie|credential|password|payload|private.?key|provider.*(?:body|payload|response)|raw.?payload|secret|session|token)/iu;
+  /(?:account|api.?key|authorization|broker.*(?:body|payload|response)|certificate|cookie|credential|endpoint|password|payload|private.?key|provider.*(?:body|payload|response)|raw.?payload|secret|session|token|uri|url)/iu;
 
 function sanitizeValue(value: unknown, seen: WeakSet<object>, depth: number): unknown {
   if (depth > 12) {

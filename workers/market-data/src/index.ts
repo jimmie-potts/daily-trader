@@ -7,6 +7,9 @@ import {
 } from '@daily-trader/observability';
 
 import { emitWorkerHealth } from './health.js';
+import { runPaperMarketDataRuntime } from './paper-runtime.js';
+import { SystemClock } from './system-clock.js';
+import { safeWorkerFailure } from './worker-failure.js';
 
 async function main(): Promise<void> {
   loadOptionalEnvironmentFile();
@@ -15,6 +18,7 @@ async function main(): Promise<void> {
     environment: config.environment,
     exporter: config.runtime.telemetryExporter,
     serviceName: 'daily-trader-market-data-worker',
+    shutdownTimeoutMs: config.marketData.shutdownTimeoutMs,
   });
   const logger = createLogger({
     environment: config.environment,
@@ -30,29 +34,56 @@ async function main(): Promise<void> {
     return;
   }
 
-  const timer = setInterval(() => {
-    withSpan('market_data_worker.health', () => emitWorkerHealth(dependencies));
-  }, config.worker.heartbeatIntervalMs);
-
-  const stop = async (signal: NodeJS.Signals): Promise<void> => {
-    clearInterval(timer);
+  const controller = new AbortController();
+  let telemetryShutdownPromise: Promise<void> | undefined;
+  const shutdownTelemetry = (): Promise<void> => {
+    telemetryShutdownPromise ??= telemetry.shutdown();
+    return telemetryShutdownPromise;
+  };
+  const stop = (signal: NodeJS.Signals): void => {
     meter.recordHealth('stopping');
     logger.info('market_data_worker.stopping', { signal });
-    await telemetry.shutdown();
+    controller.abort();
+    void shutdownTelemetry().catch(() => undefined);
   };
-  process.once('SIGINT', () => {
-    void stop('SIGINT');
-  });
-  process.once('SIGTERM', () => {
-    void stop('SIGTERM');
-  });
+  const stopForInterrupt = (): void => stop('SIGINT');
+  const stopForTermination = (): void => stop('SIGTERM');
+  process.once('SIGINT', stopForInterrupt);
+  process.once('SIGTERM', stopForTermination);
+
+  try {
+    if (config.marketData.mode === 'paper') {
+      await withSpan('market_data_worker.paper_runtime', () =>
+        runPaperMarketDataRuntime(
+          { clock: new SystemClock(), config, logger, meter },
+          controller.signal,
+        ),
+      );
+      return;
+    }
+
+    const timer = setInterval(() => {
+      withSpan('market_data_worker.health', () => emitWorkerHealth(dependencies));
+    }, config.worker.heartbeatIntervalMs);
+    try {
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+    } finally {
+      clearInterval(timer);
+    }
+  } finally {
+    process.removeListener('SIGINT', stopForInterrupt);
+    process.removeListener('SIGTERM', stopForTermination);
+    await shutdownTelemetry();
+  }
 }
 
 void main().catch((error: unknown) => {
   const event =
     error instanceof ConfigurationError
       ? { event: 'market_data_worker.configuration.invalid', issues: error.issues }
-      : { code: 'MARKET_DATA_WORKER_START_FAILED', event: 'market_data_worker.start.failed' };
+      : safeWorkerFailure(error);
   process.stderr.write(`${JSON.stringify(event)}\n`);
   process.exitCode = 1;
 });

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { createExactDecimal } from './exact-decimal.js';
+import {
+  compareExactDecimals,
+  createExactDecimal,
+  isPositiveExactDecimal,
+} from './exact-decimal.js';
 import { DomainValidationError } from './validation-error.js';
 
 describe('createExactDecimal', () => {
@@ -37,5 +41,28 @@ describe('createExactDecimal', () => {
     const value = createExactDecimal('90071992547409931234567890.123456789');
 
     expect(JSON.stringify(value)).toBe('"90071992547409931234567890.123456789"');
+  });
+});
+
+describe('exact decimal comparison', () => {
+  it.each([
+    ['0', '0', 0],
+    ['2', '10', -1],
+    ['10', '2', 1],
+    ['1.2', '1.19', 1],
+    ['1.0000000000000000001', '1', 1],
+    ['-2', '-10', 1],
+    ['-10.5', '-10.05', -1],
+    ['-0.0001', '0', -1],
+  ] as const)('compares %s to %s without numeric conversion', (left, right, expected) => {
+    expect(compareExactDecimals(createExactDecimal(left), createExactDecimal(right))).toBe(
+      expected,
+    );
+  });
+
+  it('classifies strict positivity', () => {
+    expect(isPositiveExactDecimal(createExactDecimal('0.0001'))).toBe(true);
+    expect(isPositiveExactDecimal(createExactDecimal('0'))).toBe(false);
+    expect(isPositiveExactDecimal(createExactDecimal('-0.0001'))).toBe(false);
   });
 });

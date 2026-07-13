@@ -1,0 +1,26 @@
+{
+  "name": "@daily-trader/signals-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "pretest": "npm run build:packages --prefix ../..",
+    "pretest:watch": "npm run build:packages --prefix ../..",
+    "smoke": "npm run build && node dist/index.js --once",
+    "start": "node dist/index.js",
+    "status": "node dist/signal-cli.js status",
+    "test": "vitest run --root ../.. workers/signals",
+    "test:watch": "vitest --root ../.. workers/signals",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@daily-trader/config": "*",
+    "@daily-trader/domain": "*",
+    "@daily-trader/market-data": "*",
+    "@daily-trader/observability": "*",
+    "@daily-trader/signals": "*",
+    "pg": "8.22.0"
+  }
+}

@@ -136,4 +136,24 @@ export class MarketDataMetrics {
       'Market-data boundary latency.',
     );
   }
+
+  public recordCanonicalRevisionTiming(input: {
+    readonly counterLockWaitMs: number;
+    readonly transactionDurationMs: number;
+  }): void {
+    this.#meter.recordHistogram(
+      'daily_trader.market_data.canonical_counter_lock_wait',
+      Math.max(0, input.counterLockWaitMs),
+      'ms',
+      {},
+      'Wait time for the commit-order canonical revision counter lock.',
+    );
+    this.#meter.recordHistogram(
+      'daily_trader.market_data.canonical_transaction_duration',
+      Math.max(0, input.transactionDurationMs),
+      'ms',
+      {},
+      'Duration of a committed canonical transaction that appended signal revision work.',
+    );
+  }
 }

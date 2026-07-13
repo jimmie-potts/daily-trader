@@ -48,6 +48,21 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function waitForHeartbeat(milliseconds: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', stopped);
+      resolve(false);
+    }, milliseconds);
+    const stopped = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    signal.addEventListener('abort', stopped, { once: true });
+  });
+}
+
 class RuntimeStopRequested extends Error {}
 
 export function awaitUnlessRuntimeStopped<T>(
@@ -170,7 +185,13 @@ export async function runPaperMarketDataRuntime(
       statementTimeoutMs: Math.min(30_000, config.shutdownTimeoutMs),
       maximumConnections: 5,
     }),
-    { freshnessThresholdMs: config.freshnessThresholdMs },
+    {
+      freshnessThresholdMs: config.freshnessThresholdMs,
+      writerCapabilityLeaseMs: dependencies.config.worker.heartbeatIntervalMs * 3,
+      onCanonicalRevisionTiming: (timing): void => {
+        metrics.recordCanonicalRevisionTiming(timing);
+      },
+    },
   );
   const providerController = new AbortController();
   const consumerController = new AbortController();
@@ -250,6 +271,7 @@ export async function runPaperMarketDataRuntime(
   let runtimeBoundaryError: unknown;
   let consumerPromise: Promise<void> | undefined;
   let supervisorPromise: Promise<void> | undefined;
+  let capabilityPromise: Promise<void> | undefined;
   try {
     await awaitUnlessRuntimeStopped(publisher.connect(), signal);
     await awaitUnlessRuntimeStopped(consumer.connect(), signal);
@@ -263,6 +285,20 @@ export async function runPaperMarketDataRuntime(
       signal,
     );
     sessionOpened = true;
+    capabilityPromise = (async (): Promise<void> => {
+      while (!providerController.signal.aborted) {
+        const stopped = await waitForHeartbeat(
+          dependencies.config.worker.heartbeatIntervalMs,
+          providerController.signal,
+        );
+        if (stopped) return;
+        await repository.renewWriterCapability(ingestionSessionId);
+      }
+    })().catch((error: unknown) => {
+      runtimeBoundaryError ??= error;
+      stopProvider();
+      throw error;
+    });
 
     const persistenceHandler = createRedisPersistenceHandler(repository);
     consumerPromise = consumer
@@ -387,7 +423,10 @@ export async function runPaperMarketDataRuntime(
     );
     await awaitUnlessRuntimeStopped(requestStatus(), signal);
     supervisorPromise = supervisor.run(providerController.signal);
-    await awaitUnlessRuntimeStopped(Promise.race([supervisorPromise, consumerPromise]), signal);
+    await awaitUnlessRuntimeStopped(
+      Promise.race([supervisorPromise, consumerPromise, capabilityPromise]),
+      signal,
+    );
   } catch (error) {
     if (!(error instanceof RuntimeStopRequested && signal.aborted)) {
       runtimeError = preferRuntimeBoundaryFailure(error, runtimeBoundaryError);
@@ -428,6 +467,7 @@ export async function runPaperMarketDataRuntime(
     if (statusTimer !== undefined) clearInterval(statusTimer);
     providerController.abort();
     await captureShutdown(supervisorPromise);
+    await captureShutdown(capabilityPromise);
 
     await captureShutdown(publisher.close(), () => destroyRedisClient(publisherClient));
     destroyRedisClient(publisherClient);

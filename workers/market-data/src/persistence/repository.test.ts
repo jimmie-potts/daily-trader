@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MarketDataPersistenceError,
   MarketDataRepository,
+  type MarketDataRepositoryOptions,
   type PersistMarketDataEntry,
   type SqlPool,
   type SqlPoolClient,
@@ -43,6 +44,8 @@ interface FakeLedgerEvent {
   readonly barStart: string;
   readonly receivedAt: string;
   readonly eventJson: string;
+  readonly freshnessThresholdMs: number;
+  readonly dataQualityPolicyVersion: string;
   readonly queryValues: readonly unknown[];
 }
 
@@ -62,11 +65,44 @@ interface FakeGap {
   status: 'detected' | 'observed_later';
 }
 
+interface FakeCanonicalRevision {
+  readonly position: string;
+  readonly revisionId: string;
+  readonly runId: string;
+  readonly schemaVersion: string;
+  readonly operation: string;
+  readonly orderingKey: string;
+  readonly symbol: string;
+  readonly venue: string;
+  readonly barStart: string;
+  readonly previousEventId: string | null;
+  readonly newEventId: string;
+  readonly arrivalClassification: string;
+  readonly gapState: string;
+  readonly historical: boolean;
+  readonly filledKnownGap: boolean;
+}
+
+interface FakeWriterCapability {
+  readonly sessionId: string;
+  readonly revisionContractVersion: string;
+  readonly leaseMilliseconds: number;
+  freshnessThresholdMs: number;
+  readonly dataQualityPolicyVersion: string;
+  state: 'accepted' | 'retired';
+  fresh: boolean;
+  renewalCount: number;
+}
+
 interface FakeSnapshot {
+  readonly sessions: Map<string, FakeSession>;
   readonly ledger: Map<string, FakeLedgerEvent>;
   readonly canonical: Map<string, FakeCanonicalBar>;
   readonly gaps: Map<string, FakeGap>;
+  readonly canonicalRevisions: readonly FakeCanonicalRevision[];
+  readonly revisionCounter: string;
   readonly sessionEvents: readonly FakeSessionEvent[];
+  readonly writerCapabilities: Map<string, FakeWriterCapability>;
 }
 
 interface FakeSessionEvent {
@@ -113,7 +149,15 @@ class FakeSqlDatabase {
   public ledger = new Map<string, FakeLedgerEvent>();
   public canonical = new Map<string, FakeCanonicalBar>();
   public gaps = new Map<string, FakeGap>();
+  public canonicalRevisions: FakeCanonicalRevision[] = [];
+  public revisionCounter = '1';
+  public activeCaptureRunId: string | undefined;
+  public activeCaptureBacklogLimit = 100_000;
+  public activeCaptureCursor = '0';
+  public activeCaptureFreshnessThresholdMs = 120_000;
+  public activeCaptureDataQualityPolicyVersion = 'daily-trader.market-data.quality.v1';
   public sessionEvents: FakeSessionEvent[] = [];
+  public writerCapabilities = new Map<string, FakeWriterCapability>();
   public readonly commands: string[] = [];
   public readonly calls: Array<{
     readonly command: string;
@@ -136,10 +180,21 @@ class FakeSqlDatabase {
 
     if (command === 'BEGIN') {
       this.#snapshot = {
+        sessions: new Map(
+          [...this.sessions].map(([sessionId, session]) => [sessionId, { ...session }]),
+        ),
         ledger: new Map(this.ledger),
         canonical: new Map(this.canonical),
         gaps: new Map([...this.gaps].map(([key, gap]) => [key, { ...gap }])),
+        canonicalRevisions: [...this.canonicalRevisions],
+        revisionCounter: this.revisionCounter,
         sessionEvents: [...this.sessionEvents],
+        writerCapabilities: new Map(
+          [...this.writerCapabilities].map(([sessionId, capability]) => [
+            sessionId,
+            { ...capability },
+          ]),
+        ),
       };
       return sqlResult<Row>([], null);
     }
@@ -149,10 +204,14 @@ class FakeSqlDatabase {
     }
     if (command === 'ROLLBACK') {
       if (this.#snapshot !== undefined) {
+        this.sessions = this.#snapshot.sessions;
         this.ledger = this.#snapshot.ledger;
         this.canonical = this.#snapshot.canonical;
         this.gaps = this.#snapshot.gaps;
+        this.canonicalRevisions = [...this.#snapshot.canonicalRevisions];
+        this.revisionCounter = this.#snapshot.revisionCounter;
         this.sessionEvents = [...this.#snapshot.sessionEvents];
+        this.writerCapabilities = this.#snapshot.writerCapabilities;
       }
       this.#snapshot = undefined;
       return sqlResult<Row>([], null);
@@ -218,6 +277,70 @@ class FakeSqlDatabase {
       session.endedAt = endedAt;
       return sqlResult<Row>([], 1);
     }
+    if (command === 'select-session-mode') {
+      const session = this.sessions.get(requiredString(values[0], 'sessionId'));
+      return session === undefined ? sqlResult<Row>() : sqlResult<Row>([{ mode: session.mode }]);
+    }
+    if (command === 'select-open-paper-session-for-update') {
+      const session = this.sessions.get(requiredString(values[0], 'sessionId'));
+      return session?.mode === 'paper' && session.endedAt === undefined
+        ? sqlResult<Row>([{ open: 1 }])
+        : sqlResult<Row>();
+    }
+    if (command === 'register-writer-capability') {
+      const sessionId = requiredString(values[0], 'sessionId');
+      const session = this.sessions.get(sessionId);
+      if (
+        session?.mode !== 'paper' ||
+        session.endedAt !== undefined ||
+        this.writerCapabilities.has(sessionId)
+      ) {
+        throw new Error('invalid paper writer registration');
+      }
+      this.writerCapabilities.set(sessionId, {
+        sessionId,
+        revisionContractVersion: requiredString(values[1], 'revisionContractVersion'),
+        leaseMilliseconds: Number(values[2]),
+        freshnessThresholdMs: Number(values[3]),
+        dataQualityPolicyVersion: requiredString(values[4], 'dataQualityPolicyVersion'),
+        state: 'accepted',
+        fresh: true,
+        renewalCount: 0,
+      });
+      return sqlResult<Row>([], 1);
+    }
+    if (command === 'renew-writer-capability') {
+      const sessionId = requiredString(values[0], 'sessionId');
+      const capability = this.writerCapabilities.get(sessionId);
+      const session = this.sessions.get(sessionId);
+      if (
+        capability === undefined ||
+        capability.state !== 'accepted' ||
+        !capability.fresh ||
+        session?.mode !== 'paper' ||
+        session.endedAt !== undefined ||
+        capability.revisionContractVersion !== values[1] ||
+        capability.freshnessThresholdMs !== values[3] ||
+        capability.dataQualityPolicyVersion !== values[4]
+      ) {
+        return sqlResult<Row>([], 0);
+      }
+      capability.renewalCount += 1;
+      return sqlResult<Row>([], 1);
+    }
+    if (command === 'retire-writer-capability') {
+      const sessionId = requiredString(values[0], 'sessionId');
+      const capability = this.writerCapabilities.get(sessionId);
+      if (
+        capability === undefined ||
+        capability.state !== 'accepted' ||
+        capability.revisionContractVersion !== values[1]
+      ) {
+        return sqlResult<Row>([], 0);
+      }
+      capability.state = 'retired';
+      return sqlResult<Row>([], 1);
+    }
     if (command === 'select-open-session') {
       const session = this.sessions.get(requiredString(values[0], 'sessionId'));
       return session === undefined
@@ -239,6 +362,32 @@ class FakeSqlDatabase {
     }
     if (command === 'lock-market-series') {
       return sqlResult<Row>([], 1);
+    }
+    if (command === 'set-canonical-revision-writer-contract') {
+      if (values[0] !== 'daily-trader.market-data.canonical-revision.v1') {
+        throw new Error('wrong canonical revision writer contract');
+      }
+      requiredString(values[1], 'writerSessionId');
+      return sqlResult<Row>([{ set_config: values[0] }], 1);
+    }
+    if (command === 'assert-canonical-writer-capability') {
+      const writerSessionId = requiredString(values[0], 'writerSessionId');
+      const revisionContractVersion = requiredString(values[1], 'revisionContractVersion');
+      const session = this.sessions.get(writerSessionId);
+      const capability = this.writerCapabilities.get(writerSessionId);
+      return sqlResult<Row>([
+        {
+          available:
+            this.activeCaptureRunId === undefined ||
+            (session?.mode === 'paper' &&
+              session.endedAt === undefined &&
+              capability?.state === 'accepted' &&
+              capability.fresh &&
+              capability.revisionContractVersion === revisionContractVersion &&
+              capability.freshnessThresholdMs === this.activeCaptureFreshnessThresholdMs &&
+              capability.dataQualityPolicyVersion === this.activeCaptureDataQualityPolicyVersion),
+        },
+      ]);
     }
     if (command === 'select-session-event-link') {
       const sessionId = requiredString(values[0], 'sessionId');
@@ -302,20 +451,53 @@ class FakeSqlDatabase {
       const stored: FakeLedgerEvent = {
         eventId: requiredString(values[0], 'eventId'),
         sessionId: requiredString(values[1], 'sessionId'),
-        orderingKey: requiredString(values[4], 'orderingKey'),
-        classification: requiredString(values[5], 'classification'),
-        timeliness: requiredString(values[6], 'timeliness'),
-        gapState: requiredString(values[7], 'gapState'),
-        symbol: requiredString(values[8], 'symbol'),
-        venue: requiredString(values[9], 'venue'),
-        interval: requiredString(values[10], 'interval'),
-        barStart: requiredString(values[20], 'barStart'),
-        receivedAt: requiredString(values[22], 'receivedAt'),
-        eventJson: requiredString(values[29], 'eventJson'),
+        freshnessThresholdMs: Number(values[2]),
+        dataQualityPolicyVersion: requiredString(values[3], 'dataQualityPolicyVersion'),
+        orderingKey: requiredString(values[6], 'orderingKey'),
+        classification: requiredString(values[7], 'classification'),
+        timeliness: requiredString(values[8], 'timeliness'),
+        gapState: requiredString(values[9], 'gapState'),
+        symbol: requiredString(values[10], 'symbol'),
+        venue: requiredString(values[11], 'venue'),
+        interval: requiredString(values[12], 'interval'),
+        barStart: requiredString(values[22], 'barStart'),
+        receivedAt: requiredString(values[24], 'receivedAt'),
+        eventJson: requiredString(values[31], 'eventJson'),
         queryValues: [...values],
       };
       this.ledger.set(stored.eventId, stored);
       return sqlResult<Row>([], 1);
+    }
+    if (command === 'select-prior-canonical-bar') {
+      const key = values.map((value) => requiredString(value, 'canonicalKey')).join('|');
+      const stored = this.canonical.get(key);
+      if (stored === undefined) {
+        return sqlResult<Row>();
+      }
+      const ledger = this.ledger.get(stored.eventId);
+      if (ledger === undefined) {
+        throw new Error('prior canonical missing ledger event');
+      }
+      return sqlResult<Row>([{ event_json: ledger.eventJson }]);
+    }
+    if (command === 'select-canonical-series-frontier') {
+      const symbol = requiredString(values[0], 'symbol');
+      const venue = requiredString(values[1], 'venue');
+      const frontier = [...this.canonical.values()]
+        .filter((candidate) => candidate.symbol === symbol && candidate.venue === venue)
+        .sort(
+          (left, right) =>
+            right.barStart.localeCompare(left.barStart) ||
+            right.eventId.localeCompare(left.eventId),
+        )[0];
+      if (frontier === undefined) {
+        return sqlResult<Row>();
+      }
+      const ledger = this.ledger.get(frontier.eventId);
+      if (ledger === undefined) {
+        throw new Error('canonical frontier missing ledger event');
+      }
+      return sqlResult<Row>([{ event_json: ledger.eventJson }]);
     }
     if (command === 'mark-gap-observed') {
       const key = values
@@ -362,6 +544,61 @@ class FakeSqlDatabase {
         return sqlResult<Row>([{ event_id: candidate.eventId }], 1);
       }
       return sqlResult<Row>([], 0);
+    }
+    if (command === 'lock-canonical-revision-counter') {
+      return sqlResult<Row>([{ next_position: this.revisionCounter }], 1);
+    }
+    if (command === 'select-active-capture-run') {
+      return this.activeCaptureRunId === undefined
+        ? sqlResult<Row>()
+        : sqlResult<Row>(
+            [
+              {
+                run_id: this.activeCaptureRunId,
+                backlog_limit: this.activeCaptureBacklogLimit,
+                backlog_count: this.canonicalRevisions
+                  .filter(
+                    (revision) =>
+                      revision.runId === this.activeCaptureRunId &&
+                      BigInt(revision.position) > BigInt(this.activeCaptureCursor),
+                  )
+                  .length.toString(),
+              },
+            ],
+            1,
+          );
+    }
+    if (command === 'advance-canonical-revision-counter') {
+      const current = requiredString(values[0], 'position');
+      if (current !== this.revisionCounter) {
+        return sqlResult<Row>([], 0);
+      }
+      this.revisionCounter = (BigInt(this.revisionCounter) + 1n).toString();
+      return sqlResult<Row>([], 1);
+    }
+    if (command === 'insert-canonical-revision') {
+      const previousEventId = values[9];
+      if (previousEventId !== null && typeof previousEventId !== 'string') {
+        throw new TypeError('previousEventId must be null or a string');
+      }
+      this.canonicalRevisions.push({
+        position: requiredString(values[0], 'position'),
+        revisionId: requiredString(values[1], 'revisionId'),
+        runId: requiredString(values[2], 'runId'),
+        schemaVersion: requiredString(values[3], 'schemaVersion'),
+        operation: requiredString(values[4], 'operation'),
+        orderingKey: requiredString(values[5], 'orderingKey'),
+        symbol: requiredString(values[6], 'symbol'),
+        venue: requiredString(values[7], 'venue'),
+        barStart: requiredString(values[8], 'barStart'),
+        previousEventId,
+        newEventId: requiredString(values[10], 'newEventId'),
+        arrivalClassification: requiredString(values[11], 'arrivalClassification'),
+        gapState: requiredString(values[12], 'gapState'),
+        historical: values[13] === true,
+        filledKnownGap: values[14] === true,
+      });
+      return sqlResult<Row>([], 1);
     }
     if (command === 'select-latest-bars') {
       const observedAt = requiredString(values[0], 'observedAt');
@@ -520,22 +757,151 @@ function entry(value: OneMinuteBarEvent, sessionId = 'fixture-2026-07-13'): Pers
   };
 }
 
-async function repositoryWithSession(): Promise<{
+async function repositoryWithSession(
+  mode: 'fixture' | 'paper' = 'fixture',
+  options: MarketDataRepositoryOptions = {},
+): Promise<{
   readonly pool: FakeSqlPool;
   readonly repository: MarketDataRepository;
+  readonly sessionId: string;
 }> {
   const pool = new FakeSqlPool();
-  const repository = new MarketDataRepository(pool);
+  const repository = new MarketDataRepository(pool, options);
+  const sessionId = mode === 'paper' ? 'paper-2026-07-13' : 'fixture-2026-07-13';
   await repository.createIngestionSession({
-    sessionId: 'fixture-2026-07-13',
-    mode: 'fixture',
+    sessionId,
+    mode,
     configurationVersion: 'phase2-v1',
     startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
   });
-  return { pool, repository };
+  return { pool, repository, sessionId };
 }
 
 describe('MarketDataRepository sessions and transactions', () => {
+  it('registers the accepted revision-writer capability atomically with a paper session', async () => {
+    const pool = new FakeSqlPool();
+    const repository = new MarketDataRepository(pool, { writerCapabilityLeaseMs: 60_000 });
+
+    await repository.createIngestionSession({
+      sessionId: 'paper-capable-writer',
+      mode: 'paper',
+      configurationVersion: 'phase3-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+    });
+
+    expect(pool.database.writerCapabilities.get('paper-capable-writer')).toEqual({
+      sessionId: 'paper-capable-writer',
+      revisionContractVersion: 'daily-trader.market-data.canonical-revision.v1',
+      leaseMilliseconds: 60_000,
+      freshnessThresholdMs: 120_000,
+      dataQualityPolicyVersion: 'daily-trader.market-data.quality.v1',
+      state: 'accepted',
+      fresh: true,
+      renewalCount: 0,
+    });
+    expect(pool.database.commands.indexOf('create-session')).toBeLessThan(
+      pool.database.commands.indexOf('register-writer-capability'),
+    );
+    expect(pool.database.commands.indexOf('register-writer-capability')).toBeLessThan(
+      pool.database.commands.indexOf('COMMIT'),
+    );
+    expect(
+      pool.database.commands.filter((command) => command === 'lock-market-series'),
+    ).toHaveLength(2);
+  });
+
+  it('rolls back a paper session when writer capability registration fails', async () => {
+    const pool = new FakeSqlPool();
+    pool.database.failCommand = 'register-writer-capability';
+    const repository = new MarketDataRepository(pool);
+
+    await expect(
+      repository.createIngestionSession({
+        sessionId: 'paper-registration-failure',
+        mode: 'paper',
+        configurationVersion: 'phase3-v1',
+        startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+      }),
+    ).rejects.toEqual(new MarketDataPersistenceError('query_failed'));
+
+    expect(pool.database.sessions.has('paper-registration-failure')).toBe(false);
+    expect(pool.database.writerCapabilities.has('paper-registration-failure')).toBe(false);
+    expect(pool.database.commands.at(-1)).toBe('ROLLBACK');
+  });
+
+  it('renews and atomically retires a paper writer capability on clean session close', async () => {
+    const pool = new FakeSqlPool();
+    const repository = new MarketDataRepository(pool);
+    await repository.createIngestionSession({
+      sessionId: 'paper-capability-lifecycle',
+      mode: 'paper',
+      configurationVersion: 'phase3-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+    });
+
+    await repository.renewWriterCapability('paper-capability-lifecycle');
+    await repository.closeIngestionSession(
+      'paper-capability-lifecycle',
+      createUtcTimestamp('2026-07-13T20:00:00.000Z'),
+    );
+
+    expect(pool.database.writerCapabilities.get('paper-capability-lifecycle')).toMatchObject({
+      state: 'retired',
+      renewalCount: 1,
+    });
+    expect(pool.database.sessions.get('paper-capability-lifecycle')?.endedAt).toBe(
+      '2026-07-13T20:00:00.000Z',
+    );
+    await expect(repository.renewWriterCapability('paper-capability-lifecycle')).rejects.toEqual(
+      new MarketDataPersistenceError('writer_contract_unavailable'),
+    );
+  });
+
+  it('rolls back paper session close when capability retirement fails', async () => {
+    const pool = new FakeSqlPool();
+    const repository = new MarketDataRepository(pool);
+    await repository.createIngestionSession({
+      sessionId: 'paper-retirement-failure',
+      mode: 'paper',
+      configurationVersion: 'phase3-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+    });
+    pool.database.failCommand = 'retire-writer-capability';
+
+    await expect(
+      repository.closeIngestionSession(
+        'paper-retirement-failure',
+        createUtcTimestamp('2026-07-13T20:00:00.000Z'),
+      ),
+    ).rejects.toEqual(new MarketDataPersistenceError('query_failed'));
+
+    expect(pool.database.sessions.get('paper-retirement-failure')?.endedAt).toBeUndefined();
+    expect(pool.database.writerCapabilities.get('paper-retirement-failure')?.state).toBe(
+      'accepted',
+    );
+  });
+
+  it('keeps fixture and replay sessions out of the writer capability registry', async () => {
+    const pool = new FakeSqlPool();
+    const repository = new MarketDataRepository(pool);
+    await repository.createIngestionSession({
+      sessionId: 'fixture-no-capability',
+      mode: 'fixture',
+      configurationVersion: 'phase2-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+    });
+    await repository.ensureReplayIngestionSession({
+      sessionId: 'replay-no-capability',
+      configurationVersion: 'phase2-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+    });
+
+    expect(pool.database.writerCapabilities).toHaveLength(0);
+    expect(pool.database.commands).not.toContain('register-writer-capability');
+    expect(pool.database.commands).not.toContain('renew-writer-capability');
+    expect(pool.database.commands).not.toContain('retire-writer-capability');
+  });
+
   it('creates and closes a named fixed-provider ingestion session', async () => {
     const { pool, repository } = await repositoryWithSession();
 
@@ -606,6 +972,8 @@ describe('MarketDataRepository sessions and transactions', () => {
     expect(pool.database.ledger).toHaveLength(1);
     expect(pool.database.sessionEvents).toHaveLength(1);
     expect(pool.database.canonical).toHaveLength(1);
+    expect(pool.database.canonicalRevisions).toHaveLength(0);
+    expect(pool.database.revisionCounter).toBe('1');
     expect(pool.database.commands.filter((command) => command === 'COMMIT')).toHaveLength(3);
     expect(pool.releasedClients).toBe(3);
     expect(pool.database.commands.indexOf('lock-market-series')).toBeLessThan(
@@ -657,6 +1025,275 @@ describe('MarketDataRepository sessions and transactions', () => {
     expect(pool.database.commands).toContain('BEGIN');
     expect(pool.database.commands.at(-1)).toBe('ROLLBACK');
     expect(pool.database.ledger).toHaveLength(0);
+  });
+});
+
+describe('MarketDataRepository canonical revision journal', () => {
+  it('reports bounded counter-lock wait and committed canonical transaction duration', async () => {
+    const timings: Array<{ counterLockWaitMs: number; transactionDurationMs: number }> = [];
+    let monotonicTick = 0;
+    const { pool, repository, sessionId } = await repositoryWithSession('paper', {
+      monotonicNow: () => {
+        monotonicTick += 2;
+        return monotonicTick;
+      },
+      onCanonicalRevisionTiming: (timing) => timings.push(timing),
+    });
+    pool.database.activeCaptureRunId = 'live-timing-v1';
+
+    await repository.persistEntry(entry(event(), sessionId));
+
+    expect(timings).toEqual([{ counterLockWaitMs: 2, transactionDurationMs: 6 }]);
+  });
+
+  it('journals a canonical insert for the active capture run with a textual position', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+    pool.database.revisionCounter = '9007199254740993';
+    const inserted = event();
+
+    await expect(repository.persistEntry(entry(inserted, sessionId))).resolves.toMatchObject({
+      canonicalized: true,
+    });
+
+    expect(pool.database.canonicalRevisions).toEqual([
+      expect.objectContaining({
+        position: '9007199254740993',
+        runId: 'live-breakout-v1',
+        schemaVersion: 'daily-trader.market-data.canonical-revision.v1',
+        operation: 'insert',
+        orderingKey: inserted.orderingKey,
+        previousEventId: null,
+        newEventId: inserted.eventId,
+        arrivalClassification: 'accepted',
+        gapState: 'unknown',
+        historical: false,
+        filledKnownGap: false,
+      }),
+    ]);
+    expect(pool.database.canonicalRevisions[0]?.revisionId).toMatch(/^[0-9a-f]{64}$/u);
+    expect(pool.database.revisionCounter).toBe('9007199254740994');
+    expect(
+      pool.database.calls.find(
+        ({ command }) => command === 'set-canonical-revision-writer-contract',
+      )?.values,
+    ).toEqual(['daily-trader.market-data.canonical-revision.v1', sessionId]);
+    expect(pool.database.commands.lastIndexOf('lock-market-series')).toBeLessThan(
+      pool.database.commands.indexOf('select-prior-canonical-bar'),
+    );
+    expect(pool.database.commands.indexOf('select-prior-canonical-bar')).toBeLessThan(
+      pool.database.commands.indexOf('upsert-canonical-bar'),
+    );
+    expect(pool.database.commands.indexOf('upsert-canonical-bar')).toBeLessThan(
+      pool.database.commands.indexOf('lock-canonical-revision-counter'),
+    );
+    expect(pool.database.commands.indexOf('insert-canonical-revision')).toBeLessThan(
+      pool.database.commands.lastIndexOf('COMMIT'),
+    );
+  });
+
+  it('journals only a winning replacement and names its prior canonical event', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    const first = event({
+      close: '100.5',
+      receivedAt: '2026-07-13T13:31:05.000Z',
+    });
+    const winning = event({
+      close: '101',
+      receivedAt: '2026-07-13T13:31:10.000Z',
+    });
+    await repository.persistEntry(entry(first, sessionId));
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+
+    await expect(repository.persistEntry(entry(winning, sessionId))).resolves.toMatchObject({
+      classification: 'correction',
+      canonicalized: true,
+    });
+
+    expect(pool.database.canonicalRevisions).toEqual([
+      expect.objectContaining({
+        position: '1',
+        operation: 'replace',
+        previousEventId: first.eventId,
+        newEventId: winning.eventId,
+        arrivalClassification: 'correction',
+        historical: false,
+        filledKnownGap: false,
+      }),
+    ]);
+    expect(pool.database.revisionCounter).toBe('2');
+  });
+
+  it('does not allocate journal work for a duplicate or losing replacement', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    const canonical = event({
+      close: '101',
+      receivedAt: '2026-07-13T13:31:10.000Z',
+    });
+    const losing = event({
+      close: '100.5',
+      receivedAt: '2026-07-13T13:31:05.000Z',
+    });
+    await repository.persistEntry(entry(canonical, sessionId));
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+
+    await expect(repository.persistEntry(entry(canonical, sessionId))).resolves.toMatchObject({
+      classification: 'duplicate',
+      canonicalized: false,
+    });
+    await expect(repository.persistEntry(entry(losing, sessionId))).resolves.toMatchObject({
+      classification: 'correction',
+      canonicalized: false,
+    });
+
+    expect(pool.database.canonicalRevisions).toHaveLength(0);
+    expect(pool.database.revisionCounter).toBe('1');
+  });
+
+  it('records historical out-of-order known-gap inserts separately', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    await repository.persistEntry(entry(event(), sessionId));
+    await repository.persistEntry(
+      entry(
+        event({
+          providerTimestamp: '2026-07-13T13:33:00Z',
+          receivedAt: '2026-07-13T13:34:00.000Z',
+        }),
+        sessionId,
+      ),
+    );
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+    const gapFill = event({
+      providerTimestamp: '2026-07-13T13:31:00Z',
+      receivedAt: '2026-07-13T13:34:01.000Z',
+    });
+
+    await expect(repository.persistEntry(entry(gapFill, sessionId))).resolves.toMatchObject({
+      classification: 'out_of_order',
+      canonicalized: true,
+    });
+
+    expect(pool.database.canonicalRevisions).toEqual([
+      expect.objectContaining({
+        operation: 'insert',
+        previousEventId: null,
+        newEventId: gapFill.eventId,
+        arrivalClassification: 'out_of_order',
+        gapState: 'gapped',
+        historical: true,
+        filledKnownGap: true,
+      }),
+    ]);
+  });
+
+  it('rolls back ledger, canonical state, position allocation, and revision together', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+    pool.database.failCommand = 'insert-canonical-revision';
+
+    await expect(repository.persistEntry(entry(event(), sessionId))).rejects.toEqual(
+      new MarketDataPersistenceError('query_failed'),
+    );
+
+    expect(pool.database.commands.at(-1)).toBe('ROLLBACK');
+    expect(pool.database.ledger).toHaveLength(0);
+    expect(pool.database.canonical).toHaveLength(0);
+    expect(pool.database.canonicalRevisions).toHaveLength(0);
+    expect(pool.database.revisionCounter).toBe('1');
+  });
+
+  it('fails the full transaction when the active run backlog is at capacity', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+    pool.database.activeCaptureBacklogLimit = 1;
+    await repository.persistEntry(entry(event(), sessionId));
+    const next = event({
+      providerTimestamp: '2026-07-13T13:31:00Z',
+      receivedAt: '2026-07-13T13:32:00.000Z',
+    });
+
+    await expect(repository.persistEntry(entry(next, sessionId))).rejects.toEqual(
+      new MarketDataPersistenceError('capacity_exceeded'),
+    );
+
+    expect(pool.database.commands.at(-1)).toBe('ROLLBACK');
+    expect(pool.database.ledger).toHaveLength(1);
+    expect(pool.database.canonical).toHaveLength(1);
+    expect(pool.database.canonicalRevisions).toHaveLength(1);
+    expect(pool.database.revisionCounter).toBe('2');
+  });
+
+  it('rolls back a canonical change from a paper writer whose capability lease expired', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+    const capability = pool.database.writerCapabilities.get(sessionId);
+    if (capability === undefined) throw new Error('paper capability fixture missing');
+    capability.fresh = false;
+
+    await expect(repository.persistEntry(entry(event(), sessionId))).rejects.toEqual(
+      new MarketDataPersistenceError('writer_contract_unavailable'),
+    );
+
+    expect(pool.database.commands.at(-1)).toBe('ROLLBACK');
+    expect(pool.database.ledger).toHaveLength(0);
+    expect(pool.database.canonical).toHaveLength(0);
+    expect(pool.database.canonicalRevisions).toHaveLength(0);
+    expect(pool.database.revisionCounter).toBe('1');
+  });
+
+  it('rolls back a canonical change when the writer freshness policy differs from the run', async () => {
+    const { pool, repository, sessionId } = await repositoryWithSession('paper');
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+    const capability = pool.database.writerCapabilities.get(sessionId);
+    if (capability === undefined) throw new Error('paper capability fixture missing');
+    capability.freshnessThresholdMs = 60_000;
+
+    await expect(repository.persistEntry(entry(event(), sessionId))).rejects.toEqual(
+      new MarketDataPersistenceError('writer_contract_unavailable'),
+    );
+
+    expect(pool.database.commands.at(-1)).toBe('ROLLBACK');
+    expect(pool.database.canonicalRevisions).toHaveLength(0);
+  });
+
+  it('lets a fresh persistence writer drain an old producer session after takeover', async () => {
+    const pool = new FakeSqlPool();
+    const staleRepository = new MarketDataRepository(pool);
+    const staleSessionId = 'paper-stale-producer';
+    await staleRepository.createIngestionSession({
+      sessionId: staleSessionId,
+      mode: 'paper',
+      configurationVersion: 'phase3-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:29:00.000Z'),
+    });
+    const staleCapability = pool.database.writerCapabilities.get(staleSessionId);
+    if (staleCapability === undefined) throw new Error('stale capability fixture missing');
+    staleCapability.fresh = false;
+
+    const freshRepository = new MarketDataRepository(pool);
+    const freshSessionId = 'paper-fresh-consumer';
+    await freshRepository.createIngestionSession({
+      sessionId: freshSessionId,
+      mode: 'paper',
+      configurationVersion: 'phase3-v1',
+      startedAt: createUtcTimestamp('2026-07-13T13:31:00.000Z'),
+    });
+    pool.database.activeCaptureRunId = 'live-breakout-v1';
+
+    await expect(
+      freshRepository.persistEntry(entry(event(), staleSessionId)),
+    ).resolves.toMatchObject({ canonicalized: true });
+
+    expect(pool.database.canonicalRevisions).toHaveLength(1);
+    expect(pool.database.canonicalRevisions[0]).toMatchObject({
+      runId: 'live-breakout-v1',
+      position: '1',
+    });
+    expect(
+      pool.database.calls
+        .filter(({ command }) => command === 'assert-canonical-writer-capability')
+        .at(-1)?.values,
+    ).toEqual([freshSessionId, 'daily-trader.market-data.canonical-revision.v1']);
   });
 });
 
@@ -785,7 +1422,11 @@ describe('MarketDataRepository ordering, gaps, and canonical precedence', () => 
     await repository.persistEntry(entry(exact));
 
     const stored = pool.database.ledger.get(exact.eventId);
-    expect(stored?.queryValues.slice(24, 29)).toEqual([
+    expect(stored).toMatchObject({
+      freshnessThresholdMs: 120_000,
+      dataQualityPolicyVersion: 'daily-trader.market-data.quality.v1',
+    });
+    expect(stored?.queryValues.slice(26, 31)).toEqual([
       '90071992547409931234567890.12',
       '90071992547409931234567890.99',
       '90071992547409931234567890.01',
@@ -896,6 +1537,10 @@ describe('MarketDataRepository latest queries and lifecycle', () => {
 
     await expect(repository.persistEntry(entry(delayed))).resolves.toMatchObject({
       timeliness: 'fresh',
+    });
+    expect(pool.database.ledger.get(delayed.eventId)).toMatchObject({
+      freshnessThresholdMs: 180_000,
+      dataQualityPolicyVersion: 'daily-trader.market-data.quality.v1',
     });
     await expect(
       repository.findLatestBars(createUtcTimestamp('2026-07-13T13:34:00.000Z')),

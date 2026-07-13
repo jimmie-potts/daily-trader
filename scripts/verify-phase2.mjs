@@ -135,7 +135,7 @@ try {
   });
   databaseCreated = true;
 
-  runScript('market-data:migrate', childEnvironment);
+  runScript('db:migrate', childEnvironment);
   runScript('services:check', childEnvironment);
   runScript('phase2:service-verify', {
     ...childEnvironment,

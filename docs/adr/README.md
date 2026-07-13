@@ -12,3 +12,6 @@ ADRs capture consequential choices that later work must be able to revisit expli
 | [0006](./0006-phase-2-sessions-and-provider.md)               | Phase 2 sessions and provider                 | Accepted |
 | [0007](./0007-market-event-exact-and-ordering-semantics.md)   | Market-event exact and ordering semantics     | Accepted |
 | [0008](./0008-market-data-delivery-persistence-and-replay.md) | Market-data delivery, persistence, and replay | Accepted |
+| [0009](./0009-signal-exact-arithmetic.md)                     | Signal exact arithmetic                       | Accepted |
+| [0010](./0010-canonical-revision-journal-and-run-handoff.md)  | Canonical revision journal and run handoff    | Accepted |
+| [0011](./0011-first-signal-semantics.md)                      | First signal semantics                        | Accepted |

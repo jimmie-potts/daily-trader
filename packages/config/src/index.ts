@@ -1,10 +1,41 @@
 import { z } from 'zod';
 
+import {
+  BREAKOUT_PLUS_VOLUME_DEFINITION_VERSION,
+  MAX_LOOKBACK_BARS,
+  MIN_LOOKBACK_BARS,
+  createSignalConfiguration,
+  type SignalConfiguration,
+} from '@daily-trader/signals';
+
 export const LOCAL_DATABASE_URL =
   'postgresql://daily_trader:daily_trader_local@127.0.0.1:5432/daily_trader';
 export const LOCAL_REDIS_URL = 'redis://127.0.0.1:6379';
 export const ALPACA_IEX_WEBSOCKET_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 export const MARKET_DATA_SYMBOLS = Object.freeze(['AAPL', 'SPY'] as const);
+export const SIGNAL_SYMBOLS = MARKET_DATA_SYMBOLS;
+
+const SIGNAL_ENVIRONMENT_SETTINGS = Object.freeze([
+  'SIGNAL_MODE',
+  'SIGNAL_CONFIGURATION_VERSION',
+  'SIGNAL_DEFINITION',
+  'SIGNAL_SYMBOLS',
+  'SIGNAL_LOOKBACK_WINDOW',
+  'SIGNAL_VOLUME_MULTIPLIER',
+  'SIGNAL_JOURNAL_POLL_INTERVAL_MS',
+  'SIGNAL_CLAIM_BATCH_SIZE',
+  'SIGNAL_QUEUE_CAPACITY',
+  'SIGNAL_RETRY_MAX_ATTEMPTS',
+  'SIGNAL_RETRY_BASE_DELAY_MS',
+  'SIGNAL_RETRY_MAX_DELAY_MS',
+  'SIGNAL_RETRY_JITTER_PERCENT',
+  'SIGNAL_BACKLOG_LIMIT',
+  'SIGNAL_STATEMENT_TIMEOUT_MS',
+  'SIGNAL_CLAIM_LEASE_MS',
+  'SIGNAL_CLAIM_RENEW_INTERVAL_MS',
+  'SIGNAL_SHUTDOWN_TIMEOUT_MS',
+] as const);
+const SIGNAL_ENVIRONMENT_SETTING_SET = new Set<string>(SIGNAL_ENVIRONMENT_SETTINGS);
 
 const emptyStringToUndefined = (value: unknown): unknown =>
   typeof value === 'string' && value.trim().length === 0 ? undefined : value;
@@ -96,6 +127,35 @@ const phaseTwoMarketDataSymbols = z.preprocess(
   z.literal('AAPL,SPY', { error: 'must be exactly AAPL,SPY' }).default('AAPL,SPY'),
 );
 
+const signalMode = z.preprocess(
+  emptyStringToUndefined,
+  z.enum(['disabled', 'monitor']).default('disabled'),
+);
+
+const signalDefinition = z.preprocess(
+  emptyStringToUndefined,
+  z
+    .literal(BREAKOUT_PLUS_VOLUME_DEFINITION_VERSION, {
+      error: `must be ${BREAKOUT_PLUS_VOLUME_DEFINITION_VERSION}`,
+    })
+    .default(BREAKOUT_PLUS_VOLUME_DEFINITION_VERSION),
+);
+
+const signalSymbols = z.preprocess(
+  emptyStringToUndefined,
+  z.literal('AAPL,SPY', { error: 'must be exactly AAPL,SPY' }).default('AAPL,SPY'),
+);
+
+const signalExactDecimal = z.preprocess(
+  (value) => emptyStringToUndefined(value) ?? '1.5',
+  z
+    .string()
+    .regex(
+      /^(?:0|[1-9]\d*)(?:\.\d*[1-9])?$/u,
+      'must be canonical exact-decimal text without exponent notation or trailing zeroes',
+    ),
+);
+
 const environmentSchema = z
   .object({
     APP_ENV: z.preprocess(
@@ -144,6 +204,30 @@ const environmentSchema = z
     MARKET_DATA_RECONNECT_BASE_DELAY_MS: integerString('500', 100, 30_000),
     MARKET_DATA_RECONNECT_MAX_DELAY_MS: integerString('30000', 100, 120_000),
     MARKET_DATA_RECONNECT_JITTER_PERCENT: integerString('20', 0, 50),
+    SIGNAL_MODE: signalMode,
+    SIGNAL_CONFIGURATION_VERSION: z.preprocess(
+      emptyStringToUndefined,
+      z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,127}$/u, 'must be a bounded version identifier')
+        .default('phase3-v1'),
+    ),
+    SIGNAL_DEFINITION: signalDefinition,
+    SIGNAL_SYMBOLS: signalSymbols,
+    SIGNAL_LOOKBACK_WINDOW: integerString('20', MIN_LOOKBACK_BARS, MAX_LOOKBACK_BARS),
+    SIGNAL_VOLUME_MULTIPLIER: signalExactDecimal,
+    SIGNAL_JOURNAL_POLL_INTERVAL_MS: integerString('250', 25, 5_000),
+    SIGNAL_CLAIM_BATCH_SIZE: integerString('50', 1, 500),
+    SIGNAL_QUEUE_CAPACITY: integerString('1000', 1, 10_000),
+    SIGNAL_RETRY_MAX_ATTEMPTS: integerString('5', 1, 20),
+    SIGNAL_RETRY_BASE_DELAY_MS: integerString('100', 25, 30_000),
+    SIGNAL_RETRY_MAX_DELAY_MS: integerString('5000', 25, 120_000),
+    SIGNAL_RETRY_JITTER_PERCENT: integerString('20', 0, 50),
+    SIGNAL_BACKLOG_LIMIT: integerString('10000', 1, 100_000),
+    SIGNAL_STATEMENT_TIMEOUT_MS: integerString('10000', 100, 60_000),
+    SIGNAL_CLAIM_LEASE_MS: integerString('30000', 5_000, 120_000),
+    SIGNAL_CLAIM_RENEW_INTERVAL_MS: integerString('10000', 1_000, 40_000),
+    SIGNAL_SHUTDOWN_TIMEOUT_MS: integerString('10000', 100, 30_000),
     DATABASE_URL: z.preprocess(
       (value) => emptyStringToUndefined(value) ?? LOCAL_DATABASE_URL,
       databaseUrl,
@@ -207,6 +291,50 @@ const environmentSchema = z
       });
     }
 
+    if (environment.SIGNAL_RETRY_BASE_DELAY_MS > environment.SIGNAL_RETRY_MAX_DELAY_MS) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be less than or equal to SIGNAL_RETRY_MAX_DELAY_MS',
+        path: ['SIGNAL_RETRY_BASE_DELAY_MS'],
+      });
+    }
+
+    if (environment.SIGNAL_CLAIM_BATCH_SIZE > environment.SIGNAL_QUEUE_CAPACITY) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be less than or equal to SIGNAL_QUEUE_CAPACITY',
+        path: ['SIGNAL_CLAIM_BATCH_SIZE'],
+      });
+    }
+
+    if (environment.SIGNAL_QUEUE_CAPACITY > environment.SIGNAL_BACKLOG_LIMIT) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be less than or equal to SIGNAL_BACKLOG_LIMIT',
+        path: ['SIGNAL_QUEUE_CAPACITY'],
+      });
+    }
+
+    if (environment.SIGNAL_CLAIM_RENEW_INTERVAL_MS * 3 > environment.SIGNAL_CLAIM_LEASE_MS) {
+      context.addIssue({
+        code: 'custom',
+        message: 'must be no more than one third of SIGNAL_CLAIM_LEASE_MS',
+        path: ['SIGNAL_CLAIM_RENEW_INTERVAL_MS'],
+      });
+    }
+
+    const maximumSignalAttemptMilliseconds =
+      environment.SIGNAL_RETRY_MAX_DELAY_MS * (100 + environment.SIGNAL_RETRY_JITTER_PERCENT) +
+      environment.SIGNAL_STATEMENT_TIMEOUT_MS * 100;
+    if (maximumSignalAttemptMilliseconds > environment.SIGNAL_CLAIM_LEASE_MS * 100) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'statement timeout plus jittered retry delay must fit within SIGNAL_CLAIM_LEASE_MS',
+        path: ['SIGNAL_CLAIM_LEASE_MS'],
+      });
+    }
+
     const maximumReconnectDelayWithJitter =
       environment.MARKET_DATA_RECONNECT_MAX_DELAY_MS *
       (100 + environment.MARKET_DATA_RECONNECT_JITTER_PERCENT);
@@ -253,6 +381,7 @@ export type MarketDataMode = 'disabled' | 'paper';
 export type MarketDataProvider = 'alpaca';
 export type MarketDataFeed = 'iex';
 export type MarketDataSymbol = (typeof MARKET_DATA_SYMBOLS)[number];
+export type SignalMode = 'disabled' | 'monitor';
 
 export interface MarketDataConfiguration {
   readonly mode: MarketDataMode;
@@ -282,6 +411,29 @@ export interface ProviderConfiguration {
   readonly accountId: string | undefined;
 }
 
+export interface SignalOperationalConfiguration {
+  readonly journalPollIntervalMs: number;
+  readonly claimBatchSize: number;
+  readonly queueCapacity: number;
+  readonly retry: {
+    readonly maxAttempts: number;
+    readonly baseDelayMs: number;
+    readonly maxDelayMs: number;
+    readonly jitterPercent: number;
+  };
+  readonly backlogLimit: number;
+  readonly statementTimeoutMs: number;
+  readonly claimLeaseMs: number;
+  readonly claimRenewIntervalMs: number;
+  readonly shutdownTimeoutMs: number;
+}
+
+export interface SignalRuntimeConfiguration {
+  readonly mode: SignalMode;
+  readonly configuration: SignalConfiguration;
+  readonly operational: SignalOperationalConfiguration;
+}
+
 export interface ApplicationConfig {
   readonly environment: AppEnvironment;
   readonly runtime: {
@@ -296,6 +448,7 @@ export interface ApplicationConfig {
     readonly heartbeatIntervalMs: number;
   };
   readonly marketData: MarketDataConfiguration;
+  readonly signal: SignalRuntimeConfiguration;
   readonly trading: {
     readonly brokerMode: 'paper';
     readonly executionEnabled: false;
@@ -357,6 +510,18 @@ const freezeProvider = (provider: ProviderConfiguration): ProviderConfiguration 
  * to external services. Errors mention setting names, never supplied values.
  */
 export function loadConfig(environment: EnvironmentMap = process.env): ApplicationConfig {
+  const unknownSignalSettings = Object.keys(environment)
+    .filter((name) => name.startsWith('SIGNAL_') && !SIGNAL_ENVIRONMENT_SETTING_SET.has(name))
+    .sort();
+  if (unknownSignalSettings.length > 0) {
+    throw new ConfigurationError(
+      unknownSignalSettings.map((setting) => ({
+        setting,
+        message: 'is not an approved Phase 3 signal setting',
+      })),
+    );
+  }
+
   const result = environmentSchema.safeParse(environment);
 
   if (!result.success) {
@@ -370,6 +535,23 @@ export function loadConfig(environment: EnvironmentMap = process.env): Applicati
 
   const parsed = result.data;
   const usesLocalDefaults = parsed.APP_ENV === 'local' || parsed.APP_ENV === 'test';
+
+  let signalConfiguration: SignalConfiguration;
+  try {
+    signalConfiguration = createSignalConfiguration({
+      configurationVersion: parsed.SIGNAL_CONFIGURATION_VERSION,
+      lookbackBars: parsed.SIGNAL_LOOKBACK_WINDOW,
+      volumeMultiplier: parsed.SIGNAL_VOLUME_MULTIPLIER,
+      freshnessThresholdMs: parsed.MARKET_DATA_FRESHNESS_THRESHOLD_MS,
+    });
+  } catch {
+    throw new ConfigurationError([
+      {
+        setting: 'SIGNAL_VOLUME_MULTIPLIER',
+        message: 'must satisfy the approved exact-decimal signal arithmetic policy',
+      },
+    ]);
+  }
 
   if (!usesLocalDefaults) {
     const missingServiceSettings: ConfigurationIssue[] = [];
@@ -423,6 +605,26 @@ export function loadConfig(environment: EnvironmentMap = process.env): Applicati
         baseDelayMs: parsed.MARKET_DATA_RECONNECT_BASE_DELAY_MS,
         maxDelayMs: parsed.MARKET_DATA_RECONNECT_MAX_DELAY_MS,
         jitterPercent: parsed.MARKET_DATA_RECONNECT_JITTER_PERCENT,
+      }),
+    }),
+    signal: Object.freeze({
+      mode: parsed.SIGNAL_MODE,
+      configuration: signalConfiguration,
+      operational: Object.freeze({
+        journalPollIntervalMs: parsed.SIGNAL_JOURNAL_POLL_INTERVAL_MS,
+        claimBatchSize: parsed.SIGNAL_CLAIM_BATCH_SIZE,
+        queueCapacity: parsed.SIGNAL_QUEUE_CAPACITY,
+        retry: Object.freeze({
+          maxAttempts: parsed.SIGNAL_RETRY_MAX_ATTEMPTS,
+          baseDelayMs: parsed.SIGNAL_RETRY_BASE_DELAY_MS,
+          maxDelayMs: parsed.SIGNAL_RETRY_MAX_DELAY_MS,
+          jitterPercent: parsed.SIGNAL_RETRY_JITTER_PERCENT,
+        }),
+        backlogLimit: parsed.SIGNAL_BACKLOG_LIMIT,
+        statementTimeoutMs: parsed.SIGNAL_STATEMENT_TIMEOUT_MS,
+        claimLeaseMs: parsed.SIGNAL_CLAIM_LEASE_MS,
+        claimRenewIntervalMs: parsed.SIGNAL_CLAIM_RENEW_INTERVAL_MS,
+        shutdownTimeoutMs: parsed.SIGNAL_SHUTDOWN_TIMEOUT_MS,
       }),
     }),
     trading: Object.freeze({
@@ -498,6 +700,16 @@ export interface SafeConfigDiagnostics {
       readonly jitterPercent: number;
     };
   };
+  readonly signal: {
+    readonly mode: SignalMode;
+    readonly signalDefinitionVersion: string;
+    readonly configurationVersion: string;
+    readonly configurationHash: string;
+    readonly scope: SignalConfiguration['scope'];
+    readonly lookbackBars: number;
+    readonly volumeMultiplier: string;
+    readonly operational: SignalOperationalConfiguration;
+  };
   readonly services: {
     readonly database: SafeEndpointMetadata;
     readonly redis: SafeEndpointMetadata;
@@ -531,6 +743,19 @@ export function getSafeConfigDiagnostics(config: ApplicationConfig): SafeConfigD
       shutdownTimeoutMs: config.marketData.shutdownTimeoutMs,
       queueCapacity: config.marketData.queueCapacity,
       reconnect: Object.freeze({ ...config.marketData.reconnect }),
+    }),
+    signal: Object.freeze({
+      mode: config.signal.mode,
+      signalDefinitionVersion: config.signal.configuration.signalDefinitionVersion,
+      configurationVersion: config.signal.configuration.configurationVersion,
+      configurationHash: config.signal.configuration.configurationHash,
+      scope: config.signal.configuration.scope,
+      lookbackBars: config.signal.configuration.lookbackBars,
+      volumeMultiplier: config.signal.configuration.volumeMultiplier,
+      operational: Object.freeze({
+        ...config.signal.operational,
+        retry: Object.freeze({ ...config.signal.operational.retry }),
+      }),
     }),
     services: Object.freeze({
       database: safeEndpointMetadata(config.services.database.url),

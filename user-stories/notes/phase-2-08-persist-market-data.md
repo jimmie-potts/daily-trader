@@ -7,7 +7,7 @@
 
 `infrastructure/postgres/migrations/0001_market_data.sql` creates named ingestion sessions with their effective freshness threshold, session-event audit links, an append-only normalized-event ledger, a TimescaleDB-backed canonical one-minute-bar table, and detected-gap state. The checksum-protected migration runner uses an advisory lock and per-migration transaction; reruns verify applied content without deleting data.
 
-`MarketDataRepository` revalidates canonical event JSON, takes a per-market-series transaction lock, classifies duplicates, corrections, ordering, timeliness, and gaps, and persists each distinct event transactionally. Exact database `NUMERIC` values remain text through application codecs. Duplicate event IDs add at most one link to another open replay/source session and never copy the global ledger row. For one logical bar, the greatest `(receivedAt, eventId)` tuple becomes canonical while every correction remains in the ledger. Latest-bar queries exclude future bars and apply the effective configured freshness threshold. The Redis entry handler acknowledges only after repository success.
+`MarketDataRepository` revalidates canonical event JSON, takes a per-market-series transaction lock, classifies duplicates, corrections, ordering, timeliness, and gaps, and persists each distinct event transactionally. Exact database `NUMERIC` values remain text through application codecs. Duplicate event IDs add at most one link to another open replay/source session and never copy the global ledger row. For one logical bar, the greatest `(receivedAt, eventId)` tuple becomes canonical while every correction remains in the ledger. Latest-bar queries exclude future bars and apply the effective configured freshness threshold. During Phase 3 capture, a leased current persistence-writer identity additionally binds the accepted revision contract, freshness threshold, and data-quality policy; a fresh replacement can drain a pending entry from an expired producer session, but the expired process cannot commit a canonical change. The Redis entry handler acknowledges only after repository success.
 
 ## Validation Evidence
 
@@ -18,4 +18,4 @@
 
 ## Handoff
 
-Run `npm run market-data:migrate` before ingestion or replay against a new database. Never modify an applied migration, convert exact database values through JavaScript number, truncate audit history implicitly, or change canonical precedence without a new ADR and migration.
+Run `npm run db:migrate` before ingestion or replay against a new database. Never modify an applied migration, convert exact database values through JavaScript number, truncate audit history implicitly, or change canonical precedence without a new ADR and migration.

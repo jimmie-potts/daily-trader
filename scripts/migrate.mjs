@@ -20,7 +20,7 @@ async function loadMigrations() {
     .sort();
 
   if (names.length === 0) {
-    throw new Error('No market-data migrations were found');
+    throw new Error('No database migrations were found');
   }
 
   return Promise.all(
@@ -35,7 +35,7 @@ async function migrate() {
   loadOptionalEnvironmentFile();
   const config = loadConfig();
   const client = new Client({
-    application_name: 'daily-trader-market-data-migrations',
+    application_name: 'daily-trader-database-migrations',
     connectionString: config.services.database.url,
     connectionTimeoutMillis: config.services.database.connectionTimeoutMs,
     query_timeout: config.services.database.connectionTimeoutMs,
@@ -69,7 +69,7 @@ async function migrate() {
           throw new Error(`Applied migration checksum changed: ${migration.name}`);
         }
         process.stdout.write(
-          `${JSON.stringify({ event: 'market_data.migration.checked', migration: migration.name })}\n`,
+          `${JSON.stringify({ event: 'database.migration.checked', migration: migration.name })}\n`,
         );
         continue;
       }
@@ -87,7 +87,7 @@ async function migrate() {
         throw error;
       }
       process.stdout.write(
-        `${JSON.stringify({ event: 'market_data.migration.applied', migration: migration.name })}\n`,
+        `${JSON.stringify({ event: 'database.migration.applied', migration: migration.name })}\n`,
       );
     }
   } finally {
@@ -103,8 +103,8 @@ try {
 } catch (error) {
   const event =
     error instanceof ConfigurationError
-      ? { event: 'market_data.migration.configuration.invalid', issues: error.issues }
-      : { code: 'MARKET_DATA_MIGRATION_FAILED', event: 'market_data.migration.failed' };
+      ? { event: 'database.migration.configuration.invalid', issues: error.issues }
+      : { code: 'DATABASE_MIGRATION_FAILED', event: 'database.migration.failed' };
   process.stderr.write(`${JSON.stringify(event)}\n`);
   process.exitCode = 1;
 }

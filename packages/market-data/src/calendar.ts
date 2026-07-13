@@ -3,6 +3,7 @@ import { createUtcTimestamp, type UtcTimestamp } from '@daily-trader/domain';
 import { MarketDataValidationError } from './validation.js';
 
 export const NYSE_CALENDAR_TIME_ZONE = 'America/New_York' as const;
+export const NYSE_CORE_SESSION_CALENDAR_VERSION = 'nyse-core-2026-2028.v1' as const;
 export const NYSE_CALENDAR_FIRST_DATE = '2026-01-01' as const;
 export const NYSE_CALENDAR_LAST_DATE = '2028-12-31' as const;
 

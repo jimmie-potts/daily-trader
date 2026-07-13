@@ -14,19 +14,25 @@ Phases 1 and 2 form a TypeScript npm-workspace monorepo on Node.js 22 with npm 1
 
 Phase 2 implements the narrow market-data slice: provider-supplied one-minute bars for AAPL at `XNAS` and SPY at `ARCX`, Alpaca IEX real-time single-exchange/zero-delay scope, regular core sessions from the embedded 2026-2028 NYSE snapshot, exact normalization, bounded adapter recovery, Redis delivery, durable canonical persistence, portable replay, and terminal status. Market data is disabled by default and the credential-gated provider smoke is separate from CI. P2-11 integrated service/restart verification has passed; do not report the phase exit as verified until the credential-gated `npm run market-data:provider-smoke` also observes normalized bars for both approved symbols.
 
-No portfolio synchronization, signal, alert, order intent, broker execution, AI research, additional symbol, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no later phase is authorized implicitly.
+Phase 3 implementation is present because the user explicitly reprioritized it ahead of the remaining P2-11 provider-bar demonstration. It adds `@daily-trader/signals`, a dedicated signals worker, bounded exact-decimal feature and rule behavior, one versioned `breakout_plus_volume` observation, append-only evidence and run transitions, a durable PostgreSQL canonical-revision journal with writer-capability cutover checks, deterministic signal replay, and terminal signal status. Signal mode defaults to disabled and the only enabled mode is monitoring-only.
+
+That reprioritization does not waive story dependencies or validation. Do not report a Phase 3 story or phase exit as complete until the credential-gated Phase 2 provider smoke observes normalized AAPL and SPY bars, the Phase 3 Docker/PostgreSQL service and restart verification passes, all remaining acceptance criteria pass, and the corresponding implementation note exists.
+
+No portfolio synchronization, alert, order intent, broker execution, AI research, additional symbol, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no later phase is authorized implicitly.
 
 ## Repository structure and commands
 
 - `apps/api/`: Fastify health API and smoke check
 - `apps/web/`: Next.js foundation status page
 - `workers/market-data/`: provider, recovery, Redis, persistence, replay, metrics, and terminal-status adapters
+- `workers/signals/`: durable canonical-revision processing, signal persistence, replay targets, metrics, and terminal status
 - `packages/domain/`: framework- and vendor-independent domain primitives
 - `packages/market-data/`: provider-neutral event, calendar, freshness, ordering, and adapter contracts
+- `packages/signals/`: provider- and persistence-independent exact features, signal rules, transitions, and replay contracts
 - `packages/config/`: validated configuration and safe diagnostics
 - `packages/observability/`: logging, metrics, tracing, and redaction
 - `packages/test-utils/`: deterministic test helpers
-- `infrastructure/postgres/migrations/`: versioned application-owned market-data schema
+- `infrastructure/postgres/migrations/`: versioned application-owned market-data and signal schema
 - `infrastructure/`: pinned local services and operating notes
 - `docs/adr/`: accepted architecture decisions
 - `user-stories/notes/`: story validation and handoff notes
@@ -37,15 +43,22 @@ Use the root commands rather than bypassing workspace checks:
 - `npm run format:check`, `npm run lint`, `npm run typecheck`: static quality gates
 - `npm run format`, `npm run lint:fix`: apply formatter and safe automatic lint fixes
 - `npm test`, `npm run test:coverage`: deterministic unit tests
+- `npm run build:config-runtime`: build configuration and its transitive workspace runtime dependencies
 - `npm run build`: build packages and all process shells
 - `npm run ci`: run the complete local CI equivalent
 - `npm run services:up`, `npm run services:check`, `npm run services:stop`: operate local dependencies
-- `npm run market-data:migrate`: apply or verify non-destructive market-data migrations
+- `npm run db:migrate`: apply or verify non-destructive application migrations
 - `npm run market-data:recording:verify`, `npm run market-data:replay`: verify and replay the synthetic portable session
 - `npm run market-data:status`: render persisted AAPL/SPY bar-close and operational status
 - `npm run market-data:provider-smoke`: run the explicit credential-gated Alpaca smoke; never claim it passed unless it ran
+- `npm run signal:recording:verify`: verify the credential-free Phase 3 catalog, schedule, manifest, and expected output
+- `npm run signal:replay`: persist the verified synthetic scenario into its isolated PostgreSQL replay target
+- `npm run signal:replay:inspect -- <target-id>`: inspect one explicitly named replay target; never mix replay into default live status
+- `npm run signal:status`: render the selected persisted live signal run and signal-worker health
+- `npm run dev:signals`, `npm run start:signals`: run the dedicated worker; disabled mode is the safe default
 - `npm run verify:foundation`: run CI, local-service checks, and process smoke checks
 - `npm run verify:phase2`: run the credential-free Phase 2 fixture, service, replay, and status handoff
+- `npm run verify:phase3`: run technical credential-free Phase 3 CI, migration, isolated replay, restart, status, and cleanup validation; even a successful run reports the phase exit blocked until provider smoke passes
 
 `npm run services:reset` deletes local volumes and must only be run intentionally. When new tooling establishes or changes commands, update this file and `README.md` in the same change.
 
@@ -283,4 +296,4 @@ Unless the user reprioritizes the roadmap, build the first vertical slice in thi
 9. Add portfolio-aware alerts.
 10. Introduce order intents only after the preceding behavior is stable.
 
-Phase 2 completes the market-data foundation in steps 1-4 and the reusable replay substrate in step 7; it does not implement the intervening signal work or authorize later behavior. Do not begin live execution, additional asset classes, sentiment analysis, or complex strategy work without an explicitly scoped later phase.
+Phase 2 completes the market-data foundation in steps 1-4 and the reusable market-data replay substrate in step 7. Phase 3 implements steps 5-7 for only `breakout_plus_volume.v1`; its credential-free Docker/PostgreSQL service, restart, and replay acceptance path has passed, but the phase remains incomplete until P2-11 observes both approved provider symbols. It does not authorize portfolio work or later behavior. Do not begin live execution, additional asset classes, sentiment analysis, or complex strategy work without an explicitly scoped later phase.

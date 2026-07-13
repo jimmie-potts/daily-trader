@@ -1,0 +1,575 @@
+{
+  "manifest": {
+    "version": "daily-trader.signals.replay-manifest.v1",
+    "recordingVersion": "daily-trader.signals.replay-recording.v1",
+    "catalogVersion": "daily-trader.signals.replay-catalog.v1",
+    "scheduleVersion": "daily-trader.signals.replay-schedule.v1",
+    "outputVersion": "daily-trader.signals.replay-output.v1",
+    "catalogChecksum": "0f2958809d65e158215ef0d39c42a0509314cf3fb47b546137ad095ed3799789",
+    "scheduleChecksum": "ada7ac14e1e0432f2edd2c3aafc3fb04962edcf0254257f428877336fa2cac73",
+    "expectedOutputChecksum": "a8d0192b5d0c1797ba04ae708685a3be01918743668d6f37580c605c99ed2e7b",
+    "configuration": {
+      "schemaVersion": "daily-trader.signals.configuration.v1",
+      "signalDefinitionVersion": "breakout_plus_volume.v1",
+      "scope": [
+        {
+          "symbol": "AAPL",
+          "venue": "XNAS",
+          "interval": "1m"
+        },
+        {
+          "symbol": "SPY",
+          "venue": "ARCX",
+          "interval": "1m"
+        }
+      ],
+      "lookbackBars": 3,
+      "volumeMultiplier": "1.5",
+      "freshnessThresholdMs": 120000,
+      "arithmeticPolicyVersion": "daily-trader.signals.arithmetic.bigjs.v1",
+      "calendarSnapshotVersion": "nyse-core-2026-2028.v1",
+      "configurationVersion": "phase3-synthetic-replay-v1",
+      "configurationHash": "e1abfe4e0239dbdb5b24001f1fa69b5977084e48326a0522d75d70dbdaac78b6"
+    },
+    "semantics": {
+      "marketEventSchemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+      "canonicalRevisionSchemaVersion": "daily-trader.market-data.canonical-revision.v1",
+      "arithmeticPolicyVersion": "daily-trader.signals.arithmetic.bigjs.v1",
+      "calendarSnapshotVersion": "nyse-core-2026-2028.v1",
+      "dataQualityPolicyVersion": "daily-trader.market-data.quality.v1",
+      "featureResultSchemaVersion": "daily-trader.signals.feature-result.v1",
+      "evaluationSchemaVersion": "daily-trader.signals.evaluation.v1",
+      "signalDefinitionVersion": "breakout_plus_volume.v1",
+      "configurationVersion": "phase3-synthetic-replay-v1",
+      "configurationHash": "e1abfe4e0239dbdb5b24001f1fa69b5977084e48326a0522d75d70dbdaac78b6"
+    },
+    "sourceMetadata": {
+      "kind": "synthetic_signal_scenario",
+      "description": "Synthetic AAPL and SPY canonical revisions for deterministic Phase 3 signal replay.",
+      "containsRawProviderFrames": false,
+      "containsCredentials": false,
+      "containsDerivedOutputClaims": false
+    },
+    "scope": [
+      {
+        "symbol": "AAPL",
+        "venue": "XNAS"
+      },
+      {
+        "symbol": "SPY",
+        "venue": "ARCX"
+      }
+    ],
+    "sessionStart": "2026-07-13T13:30:00.000Z",
+    "sessionEnd": "2026-07-13T13:37:00.000Z",
+    "catalogEventCount": 14,
+    "scheduleEntryCount": 15,
+    "checksum": "9b0e3f1dd8f7560296e2fc5a15a1c60fe27adcde760da23fb734b63ec07c07a0"
+  },
+  "catalog": {
+    "version": "daily-trader.signals.replay-catalog.v1",
+    "events": [
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "8f3335c09b6a78c689c7928b6327cbe41f1393465314d997226fec11bcc64ac8",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:30:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:30:00Z",
+        "barStart": "2026-07-13T13:30:00.000Z",
+        "barEnd": "2026-07-13T13:31:00.000Z",
+        "receivedAt": "2026-07-13T13:31:00.100Z",
+        "processedAt": "2026-07-13T13:31:00.100Z",
+        "open": "100",
+        "high": "101",
+        "low": "99",
+        "close": "100",
+        "volume": "200"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "4a69be67b877245c80d6bbb3578fc599f36c6cf9021a6e14ce76158bdc1da202",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:31:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:31:00Z",
+        "barStart": "2026-07-13T13:31:00.000Z",
+        "barEnd": "2026-07-13T13:32:00.000Z",
+        "receivedAt": "2026-07-13T13:32:00.100Z",
+        "processedAt": "2026-07-13T13:32:00.100Z",
+        "open": "101",
+        "high": "102",
+        "low": "100",
+        "close": "101",
+        "volume": "200"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "449924f88dbf2804c55c0b39bc9bdeb4f660cb9af5f45f1ae516c78bee4a327d",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:32:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:32:00Z",
+        "barStart": "2026-07-13T13:32:00.000Z",
+        "barEnd": "2026-07-13T13:33:00.000Z",
+        "receivedAt": "2026-07-13T13:33:00.100Z",
+        "processedAt": "2026-07-13T13:33:00.100Z",
+        "open": "102",
+        "high": "103",
+        "low": "101",
+        "close": "102",
+        "volume": "200"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "2324aa349a64d3b992401b88489c279a6ea03ff31911d3d97726584b7d587bae",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:33:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:33:00Z",
+        "barStart": "2026-07-13T13:33:00.000Z",
+        "barEnd": "2026-07-13T13:34:00.000Z",
+        "receivedAt": "2026-07-13T13:34:00.100Z",
+        "processedAt": "2026-07-13T13:34:00.100Z",
+        "open": "102",
+        "high": "103",
+        "low": "101",
+        "close": "102",
+        "volume": "200"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "c90fd3c605698dd01f95f264096374c5d3183eca29f3840f53d671eb1f6e5b50",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:34:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:34:00Z",
+        "barStart": "2026-07-13T13:34:00.000Z",
+        "barEnd": "2026-07-13T13:35:00.000Z",
+        "receivedAt": "2026-07-13T13:35:00.100Z",
+        "processedAt": "2026-07-13T13:35:00.100Z",
+        "open": "103",
+        "high": "105",
+        "low": "102",
+        "close": "104",
+        "volume": "300"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "244edb5b893bad2ed89c660143b4780a18868a0427628498612d1bd295422db8",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:35:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:35:00Z",
+        "barStart": "2026-07-13T13:35:00.000Z",
+        "barEnd": "2026-07-13T13:36:00.000Z",
+        "receivedAt": "2026-07-13T13:40:00.100Z",
+        "processedAt": "2026-07-13T13:40:00.100Z",
+        "open": "103",
+        "high": "104",
+        "low": "102",
+        "close": "103",
+        "volume": "200"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "f0166b6f986f9ce78687ca74d8912a15b4c50181f15c25a5663cf22e67ba5e07",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:36:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:36:00Z",
+        "barStart": "2026-07-13T13:36:00.000Z",
+        "barEnd": "2026-07-13T13:37:00.000Z",
+        "receivedAt": "2026-07-13T13:37:00.100Z",
+        "processedAt": "2026-07-13T13:37:00.100Z",
+        "open": "101",
+        "high": "103",
+        "low": "100",
+        "close": "100",
+        "volume": "350"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "5afd8174a4576bcd6a6a213561d9cf1037890a94785fade2ec5a3b9b48022ae6",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:34:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:34:00Z",
+        "barStart": "2026-07-13T13:34:00.000Z",
+        "barEnd": "2026-07-13T13:35:00.000Z",
+        "receivedAt": "2026-07-13T13:41:00.100Z",
+        "processedAt": "2026-07-13T13:41:00.100Z",
+        "open": "102",
+        "high": "103",
+        "low": "101",
+        "close": "102",
+        "volume": "200"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "bf18af5651695dd596e5e26b38e7db476dcd1da14873e6eb14025a8a00ca894f",
+        "orderingKey": "XNAS:AAPL|1m|2026-07-13T13:34:00.000Z",
+        "instrument": {
+          "symbol": "AAPL",
+          "venue": "XNAS"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:34:00Z",
+        "barStart": "2026-07-13T13:34:00.000Z",
+        "barEnd": "2026-07-13T13:35:00.000Z",
+        "receivedAt": "2026-07-13T13:35:30.100Z",
+        "processedAt": "2026-07-13T13:35:30.100Z",
+        "open": "103",
+        "high": "104",
+        "low": "102",
+        "close": "103.5",
+        "volume": "300"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "cc62c70bfa552e0a86f160445e15122a88d989926f91f9092c49d57d5f9c1f06",
+        "orderingKey": "ARCX:SPY|1m|2026-07-13T13:30:00.000Z",
+        "instrument": {
+          "symbol": "SPY",
+          "venue": "ARCX"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:30:00Z",
+        "barStart": "2026-07-13T13:30:00.000Z",
+        "barEnd": "2026-07-13T13:31:00.000Z",
+        "receivedAt": "2026-07-13T13:31:00.200Z",
+        "processedAt": "2026-07-13T13:31:00.200Z",
+        "open": "500",
+        "high": "501",
+        "low": "499",
+        "close": "500",
+        "volume": "100"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "725b69f79b88473fa1727ab2108303ce41119010d9e5100afd3a53dc96d46069",
+        "orderingKey": "ARCX:SPY|1m|2026-07-13T13:31:00.000Z",
+        "instrument": {
+          "symbol": "SPY",
+          "venue": "ARCX"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:31:00Z",
+        "barStart": "2026-07-13T13:31:00.000Z",
+        "barEnd": "2026-07-13T13:32:00.000Z",
+        "receivedAt": "2026-07-13T13:32:00.200Z",
+        "processedAt": "2026-07-13T13:32:00.200Z",
+        "open": "499",
+        "high": "500",
+        "low": "498",
+        "close": "499",
+        "volume": "100"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "39a226d3f4d0b0bf0a7382f151d75094bdbd1f8944ee9aa8fe654095220b3d3c",
+        "orderingKey": "ARCX:SPY|1m|2026-07-13T13:32:00.000Z",
+        "instrument": {
+          "symbol": "SPY",
+          "venue": "ARCX"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:32:00Z",
+        "barStart": "2026-07-13T13:32:00.000Z",
+        "barEnd": "2026-07-13T13:33:00.000Z",
+        "receivedAt": "2026-07-13T13:33:00.200Z",
+        "processedAt": "2026-07-13T13:33:00.200Z",
+        "open": "498",
+        "high": "499",
+        "low": "497",
+        "close": "498",
+        "volume": "100"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "4d33d17e62fff64ea424120efb3b1ca26866e2a63151ac6b56436be8c60af219",
+        "orderingKey": "ARCX:SPY|1m|2026-07-13T13:33:00.000Z",
+        "instrument": {
+          "symbol": "SPY",
+          "venue": "ARCX"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:33:00Z",
+        "barStart": "2026-07-13T13:33:00.000Z",
+        "barEnd": "2026-07-13T13:34:00.000Z",
+        "receivedAt": "2026-07-13T13:34:00.200Z",
+        "processedAt": "2026-07-13T13:34:00.200Z",
+        "open": "497",
+        "high": "498",
+        "low": "495",
+        "close": "496",
+        "volume": "150"
+      },
+      {
+        "schemaVersion": "daily-trader.market-data.one-minute-bar.v1",
+        "kind": "one_minute_bar",
+        "eventId": "fcd9fb2e74b5f1adf44062379f6a0a882da4d74d61bbe18e9ce5a518a788267c",
+        "orderingKey": "ARCX:SPY|1m|2026-07-13T13:34:00.000Z",
+        "instrument": {
+          "symbol": "SPY",
+          "venue": "ARCX"
+        },
+        "interval": "1m",
+        "currency": "USD",
+        "priceUnit": "USD/share",
+        "volumeUnit": "share",
+        "source": {
+          "provider": "alpaca",
+          "feed": "iex",
+          "identifier": "alpaca:iex:bars",
+          "entitlement": "real_time",
+          "delayMilliseconds": 0
+        },
+        "providerTimestamp": "2026-07-13T13:34:00Z",
+        "barStart": "2026-07-13T13:34:00.000Z",
+        "barEnd": "2026-07-13T13:35:00.000Z",
+        "receivedAt": "2026-07-13T13:35:00.200Z",
+        "processedAt": "2026-07-13T13:35:00.200Z",
+        "open": "497",
+        "high": "499",
+        "low": "496",
+        "close": "498",
+        "volume": "100"
+      }
+    ],
+    "checksum": "0f2958809d65e158215ef0d39c42a0509314cf3fb47b546137ad095ed3799789"
+  },
+  "schedule": {
+    "version": "daily-trader.signals.replay-schedule.v1",
+    "entries": [
+      {
+        "targetOrdinal": 1,
+        "eventId": "8f3335c09b6a78c689c7928b6327cbe41f1393465314d997226fec11bcc64ac8"
+      },
+      {
+        "targetOrdinal": 2,
+        "eventId": "cc62c70bfa552e0a86f160445e15122a88d989926f91f9092c49d57d5f9c1f06"
+      },
+      {
+        "targetOrdinal": 3,
+        "eventId": "4a69be67b877245c80d6bbb3578fc599f36c6cf9021a6e14ce76158bdc1da202"
+      },
+      {
+        "targetOrdinal": 4,
+        "eventId": "725b69f79b88473fa1727ab2108303ce41119010d9e5100afd3a53dc96d46069"
+      },
+      {
+        "targetOrdinal": 5,
+        "eventId": "449924f88dbf2804c55c0b39bc9bdeb4f660cb9af5f45f1ae516c78bee4a327d"
+      },
+      {
+        "targetOrdinal": 6,
+        "eventId": "449924f88dbf2804c55c0b39bc9bdeb4f660cb9af5f45f1ae516c78bee4a327d"
+      },
+      {
+        "targetOrdinal": 7,
+        "eventId": "39a226d3f4d0b0bf0a7382f151d75094bdbd1f8944ee9aa8fe654095220b3d3c"
+      },
+      {
+        "targetOrdinal": 8,
+        "eventId": "2324aa349a64d3b992401b88489c279a6ea03ff31911d3d97726584b7d587bae"
+      },
+      {
+        "targetOrdinal": 9,
+        "eventId": "4d33d17e62fff64ea424120efb3b1ca26866e2a63151ac6b56436be8c60af219"
+      },
+      {
+        "targetOrdinal": 10,
+        "eventId": "c90fd3c605698dd01f95f264096374c5d3183eca29f3840f53d671eb1f6e5b50"
+      },
+      {
+        "targetOrdinal": 11,
+        "eventId": "fcd9fb2e74b5f1adf44062379f6a0a882da4d74d61bbe18e9ce5a518a788267c"
+      },
+      {
+        "targetOrdinal": 12,
+        "eventId": "f0166b6f986f9ce78687ca74d8912a15b4c50181f15c25a5663cf22e67ba5e07"
+      },
+      {
+        "targetOrdinal": 13,
+        "eventId": "244edb5b893bad2ed89c660143b4780a18868a0427628498612d1bd295422db8"
+      },
+      {
+        "targetOrdinal": 14,
+        "eventId": "5afd8174a4576bcd6a6a213561d9cf1037890a94785fade2ec5a3b9b48022ae6"
+      },
+      {
+        "targetOrdinal": 15,
+        "eventId": "bf18af5651695dd596e5e26b38e7db476dcd1da14873e6eb14025a8a00ca894f"
+      }
+    ],
+    "checksum": "ada7ac14e1e0432f2edd2c3aafc3fb04962edcf0254257f428877336fa2cac73"
+  }
+}

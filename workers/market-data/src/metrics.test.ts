@@ -28,6 +28,10 @@ describe('MarketDataMetrics', () => {
     metrics.recordGap('SPY', 'gapped', 2);
     metrics.recordFailure('malformed');
     metrics.recordBoundaryResult('postgres', 'succeeded');
+    metrics.recordCanonicalRevisionTiming({
+      counterLockWaitMs: 2,
+      transactionDurationMs: 7,
+    });
 
     expect(observations.map(({ name }) => name)).toEqual([
       'daily_trader.market_data.connection_state',
@@ -36,6 +40,8 @@ describe('MarketDataMetrics', () => {
       'daily_trader.market_data.spy.gaps_detected',
       'daily_trader.market_data.failures',
       'daily_trader.market_data.boundary_results',
+      'daily_trader.market_data.canonical_counter_lock_wait',
+      'daily_trader.market_data.canonical_transaction_duration',
     ]);
     expect(JSON.stringify(observations)).not.toMatch(/instrument|symbol|event_id|session_id/u);
   });

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALPACA_IEX_WEBSOCKET_URL,
+  ALPACA_PAPER_TRADING_API_URL,
   ConfigurationError,
   LOCAL_DATABASE_URL,
   LOCAL_REDIS_URL,
   MARKET_DATA_SYMBOLS,
+  PORTFOLIO_READ_RESOURCES,
   getSafeConfigDiagnostics,
   loadConfig,
   loadOptionalEnvironmentFile,
@@ -69,6 +71,37 @@ describe('loadConfig', () => {
           retry: { maxAttempts: 5, baseDelayMs: 100, maxDelayMs: 5_000 },
           backlogLimit: 10_000,
           statementTimeoutMs: 10_000,
+          shutdownTimeoutMs: 10_000,
+        },
+      },
+      portfolio: {
+        mode: 'disabled',
+        provider: 'alpaca',
+        readResources: ['account', 'positions', 'orders', 'fills'],
+        baseUrl: ALPACA_PAPER_TRADING_API_URL,
+        apiKey: undefined,
+        apiSecret: undefined,
+        expectedAccountId: undefined,
+        operational: {
+          syncIntervalMs: 30_000,
+          requestTimeoutMs: 10_000,
+          staleAfterMs: 90_000,
+          maxResponseBytes: 4_194_304,
+          maxPages: 20,
+          orderPageSize: 500,
+          fillPageSize: 100,
+          maxPositions: 1_000,
+          maxOrders: 5_000,
+          maxFillsPerSync: 5_000,
+          retry: {
+            maxAttempts: 3,
+            baseDelayMs: 250,
+            maxDelayMs: 5_000,
+            jitterPercent: 20,
+          },
+          statementTimeoutMs: 10_000,
+          claimLeaseMs: 60_000,
+          claimRenewIntervalMs: 20_000,
           shutdownTimeoutMs: 10_000,
         },
       },
@@ -136,7 +169,26 @@ describe('loadConfig', () => {
       SIGNAL_CLAIM_LEASE_MS: '5000',
       SIGNAL_CLAIM_RENEW_INTERVAL_MS: '1000',
       SIGNAL_SHUTDOWN_TIMEOUT_MS: '3000',
-      PAPER_BROKER_BASE_URL: 'https://paper.example.invalid',
+      PORTFOLIO_MODE: 'paper_read_only',
+      PORTFOLIO_SYNC_INTERVAL_MS: '5000',
+      PORTFOLIO_REQUEST_TIMEOUT_MS: '1500',
+      PORTFOLIO_STALE_AFTER_MS: '10000',
+      PORTFOLIO_MAX_RESPONSE_BYTES: '2048',
+      PORTFOLIO_MAX_PAGES: '2',
+      PORTFOLIO_ORDER_PAGE_SIZE: '250',
+      PORTFOLIO_FILL_PAGE_SIZE: '50',
+      PORTFOLIO_MAX_POSITIONS: '20',
+      PORTFOLIO_MAX_ORDERS: '30',
+      PORTFOLIO_MAX_FILLS_PER_SYNC: '40',
+      PORTFOLIO_RETRY_MAX_ATTEMPTS: '2',
+      PORTFOLIO_RETRY_BASE_DELAY_MS: '100',
+      PORTFOLIO_RETRY_MAX_DELAY_MS: '500',
+      PORTFOLIO_RETRY_JITTER_PERCENT: '10',
+      PORTFOLIO_STATEMENT_TIMEOUT_MS: '1200',
+      PORTFOLIO_CLAIM_LEASE_MS: '6000',
+      PORTFOLIO_CLAIM_RENEW_INTERVAL_MS: '2000',
+      PORTFOLIO_SHUTDOWN_TIMEOUT_MS: '3000',
+      PAPER_BROKER_BASE_URL: ALPACA_PAPER_TRADING_API_URL,
       PAPER_BROKER_API_KEY: 'paper-key-value',
       PAPER_BROKER_API_SECRET: 'paper-secret-value',
       PAPER_BROKER_ACCOUNT_ID: 'paper-account-123',
@@ -169,6 +221,27 @@ describe('loadConfig', () => {
       },
     });
     expect(config.providers.paperBroker.apiKey).toBe('paper-key-value');
+    expect(config.portfolio).toMatchObject({
+      mode: 'paper_read_only',
+      provider: 'alpaca',
+      readResources: ['account', 'positions', 'orders', 'fills'],
+      baseUrl: ALPACA_PAPER_TRADING_API_URL,
+      expectedAccountId: 'paper-account-123',
+      operational: {
+        syncIntervalMs: 5_000,
+        requestTimeoutMs: 1_500,
+        staleAfterMs: 10_000,
+        maxPages: 2,
+        orderPageSize: 250,
+        fillPageSize: 50,
+        maxPositions: 20,
+        maxOrders: 30,
+        maxFillsPerSync: 40,
+        statementTimeoutMs: 1_200,
+        claimLeaseMs: 6_000,
+        claimRenewIntervalMs: 2_000,
+      },
+    });
     expect(config.signal).toMatchObject({
       mode: 'monitor',
       configuration: {
@@ -200,6 +273,11 @@ describe('loadConfig', () => {
     expect(Object.isFrozen(config.signal.configuration.scope)).toBe(true);
     expect(Object.isFrozen(config.signal.operational)).toBe(true);
     expect(Object.isFrozen(config.signal.operational.retry)).toBe(true);
+    expect(Object.isFrozen(config.portfolio)).toBe(true);
+    expect(config.portfolio.readResources).toBe(PORTFOLIO_READ_RESOURCES);
+    expect(Object.isFrozen(config.portfolio.readResources)).toBe(true);
+    expect(Object.isFrozen(config.portfolio.operational)).toBe(true);
+    expect(Object.isFrozen(config.portfolio.operational.retry)).toBe(true);
   });
 
   it('requires service locations outside local and test environments', () => {
@@ -404,6 +482,70 @@ describe('loadConfig', () => {
     expect(databaseConnected).toBe(false);
   });
 
+  it('pins a separate read-only paper portfolio boundary and rejects unsafe settings', () => {
+    expect(() => loadConfig({ PORTFOLIO_MODE: 'paper_read_only' })).toThrowError(
+      'PAPER_BROKER_API_KEY: API key and secret are required in paper_read_only mode',
+    );
+    expect(() =>
+      loadConfig({
+        PORTFOLIO_MODE: 'paper_read_only',
+        PAPER_BROKER_API_KEY: 'paper-key',
+        PAPER_BROKER_API_SECRET: 'paper-secret',
+      }),
+    ).toThrowError(
+      'PAPER_BROKER_ACCOUNT_ID: expected account ID is required in paper_read_only mode',
+    );
+    expect(() =>
+      loadConfig({ PAPER_BROKER_BASE_URL: 'https://api.alpaca.markets/v2' }),
+    ).toThrowError(ConfigurationError);
+    expect(() =>
+      loadConfig({ PAPER_BROKER_BASE_URL: `${ALPACA_PAPER_TRADING_API_URL}?live=true` }),
+    ).toThrowError(ConfigurationError);
+    expect(() => loadConfig({ PORTFOLIO_ORDER_SUBMISSION: 'true' })).toThrowError(
+      'PORTFOLIO_ORDER_SUBMISSION',
+    );
+    expect(() => loadConfig({ PAPER_BROKER_ORDER_URL: '/orders' })).toThrowError(
+      'PAPER_BROKER_ORDER_URL',
+    );
+    expect(() => loadConfig({ LIVE_BROKER_MUTATION_URL: '/orders' })).toThrowError(
+      'LIVE_BROKER_MUTATION_URL',
+    );
+  });
+
+  it.each([
+    ['PORTFOLIO_SYNC_INTERVAL_MS', '4999'],
+    ['PORTFOLIO_REQUEST_TIMEOUT_MS', '99'],
+    ['PORTFOLIO_MAX_RESPONSE_BYTES', '1023'],
+    ['PORTFOLIO_MAX_PAGES', '101'],
+    ['PORTFOLIO_ORDER_PAGE_SIZE', '501'],
+    ['PORTFOLIO_FILL_PAGE_SIZE', '101'],
+    ['PORTFOLIO_MAX_POSITIONS', '0'],
+    ['PORTFOLIO_MAX_ORDERS', '50001'],
+    ['PORTFOLIO_MAX_FILLS_PER_SYNC', '50001'],
+    ['PORTFOLIO_RETRY_MAX_ATTEMPTS', '6'],
+    ['PORTFOLIO_STATEMENT_TIMEOUT_MS', '99'],
+  ])('rejects out-of-bounds portfolio setting %s', (setting, value) => {
+    expect(() => loadConfig({ [setting]: value })).toThrowError(ConfigurationError);
+  });
+
+  it('rejects unsafe portfolio timing relationships', () => {
+    expect(() =>
+      loadConfig({ PORTFOLIO_SYNC_INTERVAL_MS: '60000', PORTFOLIO_STALE_AFTER_MS: '90000' }),
+    ).toThrowError('PORTFOLIO_STALE_AFTER_MS');
+    expect(() =>
+      loadConfig({
+        PORTFOLIO_RETRY_BASE_DELAY_MS: '1000',
+        PORTFOLIO_RETRY_MAX_DELAY_MS: '500',
+      }),
+    ).toThrowError('PORTFOLIO_RETRY_BASE_DELAY_MS');
+    expect(() =>
+      loadConfig({
+        PORTFOLIO_CLAIM_LEASE_MS: '30000',
+        PORTFOLIO_CLAIM_RENEW_INTERVAL_MS: '11000',
+      }),
+    ).toThrowError('PORTFOLIO_CLAIM_RENEW_INTERVAL_MS');
+  });
+
   it('keeps live settings separate and rejects them in the current paper-only phase', () => {
     const liveSecret = 'live-secret-must-stay-private';
 
@@ -428,6 +570,7 @@ describe('safe diagnostics', () => {
       'database-password',
       'redis-password',
       ALPACA_IEX_WEBSOCKET_URL,
+      ALPACA_PAPER_TRADING_API_URL,
       'market-data-key',
       'market-data-secret',
       'paper-key',
@@ -439,7 +582,7 @@ describe('safe diagnostics', () => {
       REDIS_URL: 'redis://default:redis-password@cache.local:6379',
       MARKET_DATA_API_KEY: 'market-data-key',
       MARKET_DATA_API_SECRET: 'market-data-secret',
-      PAPER_BROKER_BASE_URL: 'https://paper.example.invalid/path?token=private',
+      PAPER_BROKER_BASE_URL: ALPACA_PAPER_TRADING_API_URL,
       PAPER_BROKER_API_KEY: 'paper-key',
       PAPER_BROKER_API_SECRET: 'paper-secret',
       PAPER_BROKER_ACCOUNT_ID: 'account-98765',
@@ -494,6 +637,39 @@ describe('safe diagnostics', () => {
     });
     expect(diagnostics.signal).not.toHaveProperty('apiKey');
     expect(diagnostics.signal).not.toHaveProperty('apiSecret');
+    expect(diagnostics.portfolio).toEqual({
+      mode: 'disabled',
+      provider: 'alpaca',
+      readResources: ['account', 'positions', 'orders', 'fills'],
+      credentialsConfigured: false,
+      expectedAccountConfigured: false,
+      operational: {
+        syncIntervalMs: 30_000,
+        requestTimeoutMs: 10_000,
+        staleAfterMs: 90_000,
+        maxResponseBytes: 4_194_304,
+        maxPages: 20,
+        orderPageSize: 500,
+        fillPageSize: 100,
+        maxPositions: 1_000,
+        maxOrders: 5_000,
+        maxFillsPerSync: 5_000,
+        retry: {
+          maxAttempts: 3,
+          baseDelayMs: 250,
+          maxDelayMs: 5_000,
+          jitterPercent: 20,
+        },
+        statementTimeoutMs: 10_000,
+        claimLeaseMs: 60_000,
+        claimRenewIntervalMs: 20_000,
+        shutdownTimeoutMs: 10_000,
+      },
+    });
+    expect(diagnostics.portfolio).not.toHaveProperty('baseUrl');
+    expect(diagnostics.portfolio).not.toHaveProperty('apiKey');
+    expect(diagnostics.portfolio).not.toHaveProperty('apiSecret');
+    expect(Object.isFrozen(diagnostics.portfolio.readResources)).toBe(true);
   });
 
   it('redacts credential-like environment fields', () => {

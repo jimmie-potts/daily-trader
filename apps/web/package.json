@@ -5,13 +5,13 @@
   "type": "module",
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "prebuild": "npm run build:config-runtime --prefix ../.. && node ../../scripts/validate-config.mjs",
     "predev": "npm run build:config-runtime --prefix ../.. && node ../../scripts/validate-config.mjs",
     "prestart": "node ../../scripts/validate-config.mjs",
     "pretest": "npm run build:packages --prefix ../..",
     "pretest:watch": "npm run build:packages --prefix ../..",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "test": "vitest run --root ../.. apps/web",
     "test:watch": "vitest --root ../.. apps/web",
     "typecheck": "next typegen && tsc --noEmit"

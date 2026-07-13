@@ -1,7 +1,7 @@
 # P2-10 Implementation Note
 
-- Status: Implemented; provider bar validation pending
-- Implemented: 2026-07-12
+- Status: Complete
+- Completed: 2026-07-13
 
 ## What Was Implemented
 
@@ -14,7 +14,8 @@ Missing data remains missing without zero-fill or symbol substitution. The separ
 - The targeted status suite passed with 1 file and 15 tests.
 - Assertions cover fresh, stale, future, delayed, late, gapped, disconnected, reconnecting, closed-market, unknown-calendar, no-data, partial AAPL/SPY, degraded/unavailable dependencies, deterministic output, and mismatched repository slots.
 - Tests prove rendered output excludes recognizable secrets, raw payload fields, event IDs, unused OHLC values, and volume.
-- Sanitized service replay: **Pass** — the initial and post-restart verifier passes rendered byte-identical status for persisted AAPL/SPY bars with healthy Redis/PostgreSQL state. The credential-gated provider session connected, authenticated, and subscribed on 2026-07-12, but no Sunday minute bar arrived before the inactivity deadline, so provider-backed price/status output is not represented as passing.
+- Sanitized service replay: **Pass** — the initial and post-restart verifier passes rendered byte-identical status for persisted AAPL/SPY bars with healthy Redis/PostgreSQL state.
+- Credential-gated provider boundary on 2026-07-13: **Pass** — `node --env-file=dev.env workers/market-data/dist/provider-smoke.js` authenticated and subscribed to exact AAPL/SPY bars on Alpaca IEX, reported the configured real-time single-exchange entitlement truthfully, observed normalized one-minute AAPL/XNAS and SPY/ARCX bars at 17:18Z, and shut down cleanly. This evidence validates the live input and source-status boundary without implying that the provider echoed feed metadata or that the smoke persisted a separate status projection.
 
 ## Handoff
 

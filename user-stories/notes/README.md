@@ -16,38 +16,58 @@ These notes record what each completed story established, how it was validated, 
 
 ## Phase 2: Market-Data Ingestion
 
-| Story | Note                                                                   | Status                |
-| ----- | ---------------------------------------------------------------------- | --------------------- |
-| P2-01 | [Market-data contracts](./phase-2-01-market-data-contracts.md)         | Complete              |
-| P2-02 | [Safe feed configuration](./phase-2-02-safe-feed-configuration.md)     | Complete              |
-| P2-03 | [Provider adapter contract](./phase-2-03-provider-adapter-contract.md) | Complete              |
-| P2-04 | [Provider-bar normalization](./phase-2-04-normalize-provider-bars.md)  | Complete              |
-| P2-05 | [Paper-compatible feed](./phase-2-05-connect-paper-feed.md)            | Provider bars pending |
-| P2-06 | [Stream recovery](./phase-2-06-stream-recovery.md)                     | Complete              |
-| P2-07 | [Redis event delivery](./phase-2-07-redis-event-delivery.md)           | Complete              |
-| P2-08 | [Market-data persistence](./phase-2-08-persist-market-data.md)         | Complete              |
-| P2-09 | [Portable recording and replay](./phase-2-09-record-and-replay.md)     | Complete              |
-| P2-10 | [Terminal market status](./phase-2-10-terminal-market-status.md)       | Provider bars pending |
-| P2-11 | [Phase 2 verification](./phase-2-11-phase-verification.md)             | Provider bars pending |
+| Story | Note                                                                   | Status   |
+| ----- | ---------------------------------------------------------------------- | -------- |
+| P2-01 | [Market-data contracts](./phase-2-01-market-data-contracts.md)         | Complete |
+| P2-02 | [Safe feed configuration](./phase-2-02-safe-feed-configuration.md)     | Complete |
+| P2-03 | [Provider adapter contract](./phase-2-03-provider-adapter-contract.md) | Complete |
+| P2-04 | [Provider-bar normalization](./phase-2-04-normalize-provider-bars.md)  | Complete |
+| P2-05 | [Paper-compatible feed](./phase-2-05-connect-paper-feed.md)            | Complete |
+| P2-06 | [Stream recovery](./phase-2-06-stream-recovery.md)                     | Complete |
+| P2-07 | [Redis event delivery](./phase-2-07-redis-event-delivery.md)           | Complete |
+| P2-08 | [Market-data persistence](./phase-2-08-persist-market-data.md)         | Complete |
+| P2-09 | [Portable recording and replay](./phase-2-09-record-and-replay.md)     | Complete |
+| P2-10 | [Terminal market status](./phase-2-10-terminal-market-status.md)       | Complete |
+| P2-11 | [Phase 2 verification](./phase-2-11-phase-verification.md)             | Complete |
 
-## Phase 3: First Deterministic Signal (Implementation Present; Notes Pending)
+## Phase 3: First Deterministic Signal
 
-Phase 3 has a dependency-ordered [story backlog](../README.md#phase-3-first-deterministic-signal), and implementation is present because the user explicitly reprioritized it ahead of the remaining P2-11 provider-bar demonstration. No Phase 3 implementation note exists yet because code presence is not story completion.
+The credential-free technical verifier and Docker/PostgreSQL service, restart, live-worker, and replay matrix passed before the external input dependency. The 2026-07-13 credential-gated provider smoke then observed normalized AAPL and SPY bars and resolved P2-11, making the completed Phase 3 notes eligible.
 
-| Story | Implementation state      | Note eligibility                                       |
-| ----- | ------------------------- | ------------------------------------------------------ |
-| P3-01 | Present; technical pass   | Blocked by P2-11 provider-observation dependency       |
-| P3-02 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-03 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-04 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-05 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-06 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-07 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-08 | Present; technical pass   | Blocked by the transitive P2-11 dependency             |
-| P3-09 | Technical verifier passed | Blocked by the P2-11 provider-observation prerequisite |
+| Story | Note                                                                             | Status   |
+| ----- | -------------------------------------------------------------------------------- | -------- |
+| P3-01 | [Signal decisions and contracts](./phase-3-01-signal-decisions-and-contracts.md) | Complete |
+| P3-02 | [Safe signal configuration](./phase-3-02-safe-signal-configuration.md)           | Complete |
+| P3-03 | [Deterministic feature windows](./phase-3-03-deterministic-feature-windows.md)   | Complete |
+| P3-04 | [Breakout-plus-volume rule](./phase-3-04-breakout-volume-signal.md)              | Complete |
+| P3-05 | [Signal evidence persistence](./phase-3-05-persist-signal-evidence.md)           | Complete |
+| P3-06 | [Canonical-bar processing](./phase-3-06-process-canonical-bars.md)               | Complete |
+| P3-07 | [Deterministic signal replay](./phase-3-07-replay-signal-sessions.md)            | Complete |
+| P3-08 | [Terminal signal status](./phase-3-08-terminal-signal-status.md)                 | Complete |
+| P3-09 | [Phase 3 verification](./phase-3-09-phase-verification.md)                       | Complete |
 
-Add a story note only after its dependencies, acceptance criteria, and validation have passed. The note must record exact commands and results; it must not infer provider success from synthetic data or infer PostgreSQL/restart success from unit mocks.
+The P3-09 note keeps the credential-gated provider input proof separate from synthetic signal behavior and records the 52-file/544-test CI plus Docker/PostgreSQL verification evidence.
+
+## Phase 4: Read-Only Portfolio Monitoring
+
+P4-01 through P4-10 have completed implementation notes. The credential-free package, adapter, normalization, persistence, worker, reconciliation, calculation, API, and dashboard behavior is implemented and tested. `npm run verify:phase4` passed root CI with 73 test files/916 tests plus the disposable-database migration, fixture persistence, API, restart, orphan-recovery, pointer-preservation, deterministic-presentation, and cleanup matrix. P4-11 remains open because the separately credential-gated paper-broker provider smoke has not run; fixture or technical-verifier evidence is not a substitute for that external account observation.
+
+| Story | Note                                                                                     | Status                 |
+| ----- | ---------------------------------------------------------------------------------------- | ---------------------- |
+| P4-01 | [Portfolio contracts and decisions](./phase-4-01-portfolio-contracts-and-decisions.md)   | Complete               |
+| P4-02 | [Safe paper portfolio configuration](./phase-4-02-safe-paper-portfolio-configuration.md) | Complete               |
+| P4-03 | [GET-only paper broker adapter](./phase-4-03-read-only-broker-adapter.md)                | Complete               |
+| P4-04 | [Broker-observation normalization](./phase-4-04-normalize-broker-observations.md)        | Complete               |
+| P4-05 | [Portfolio snapshot persistence](./phase-4-05-persist-portfolio-snapshots.md)            | Complete               |
+| P4-06 | [Paper-portfolio synchronization](./phase-4-06-synchronize-paper-portfolio.md)           | Complete               |
+| P4-07 | [Projection-integrity reconciliation](./phase-4-07-reconcile-portfolio-projection.md)    | Complete               |
+| P4-08 | [Exact portfolio projections](./phase-4-08-calculate-portfolio-projections.md)           | Complete               |
+| P4-09 | [Read-only portfolio API](./phase-4-09-read-only-portfolio-api.md)                       | Complete               |
+| P4-10 | [Paper-portfolio dashboard](./phase-4-10-paper-portfolio-dashboard.md)                   | Complete               |
+| P4-11 | Technical verifier passed; no completion note because provider smoke has not run         | Provider smoke pending |
 
 ## Shared Phase Boundary
 
-Phase 1 supplied the safe foundation; Phase 2 adds the market-data slice described by ADRs 0006-0008; and the current Phase 3 workspace adds only the deterministic signal slice described by ADRs 0009-0011. Market data and signal monitoring both default to disabled. Signal output is an observation, not a recommendation or position action. The implementation has no portfolio state, alert, notification, order intent, risk approval, broker access, AI research, additional asset, consolidated feed, or execution behavior. Phase 3 does not authorize Phase 4 or later work.
+Phases 1-3 are complete: the safe foundation supports the exact AAPL/SPY market-data slice in ADRs 0006-0008 and the observation-only deterministic signal slice in ADRs 0009-0011. Market data and signal monitoring both default to disabled, and signal output remains an observation rather than a recommendation or position action.
+
+Phase 4 remains authorized only as the read-only portfolio-monitoring slice described by ADRs 0012-0014. It defaults to disabled, uses separate paper broker credentials, exposes only four accepted GET resources, preserves unsupported holdings and incomplete states, and keeps broker marks visibly distinct from Phase 2 market data. Its external phase exit remains pending P4-11. It does not authorize alerts, notifications, portfolio-risk decisions, order intents, approvals, broker mutations, execution, live brokerage, AI research, or later phases.

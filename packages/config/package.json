@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@daily-trader/signals": "*",
     "zod": "4.4.3"
   }
 }

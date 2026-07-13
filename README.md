@@ -11,11 +11,13 @@ The project begins as a monitoring and paper-trading system. Live automated exec
 
 Daily Trader is an npm-workspace TypeScript monorepo running on Node.js 22. Phase 1 established the framework shells, strict domain/configuration/observability packages, local PostgreSQL/TimescaleDB and Redis services, deterministic tests, and CI gates. Phase 2 builds directly on that foundation with a provider-neutral market-data package, an Alpaca adapter, bounded stream recovery, Redis Stream delivery, TimescaleDB persistence, portable replay, and truthful terminal status.
 
+Phase 3 implementation is present in the workspace. It adds the provider-independent `@daily-trader/signals` package, the dedicated PostgreSQL-backed signals worker, exact bounded decimal arithmetic, one versioned breakout-plus-volume observation, append-only evaluation evidence, a durable canonical-revision journal and writer-capability cutover handshake, deterministic signal replay, and terminal signal status. This implementation consumes Phase 2's committed canonical AAPL/SPY bars; it does not connect directly to Alpaca or treat Redis as the durability authority for signal work.
+
 The implemented market-data scope is deliberately narrow: provider-supplied one-minute bars for AAPL at `XNAS` and SPY at `ARCX`, during the regular US-equities core session only. Alpaca IEX is real-time single-exchange data with zero configured delay; it is not a consolidated market feed. Session decisions use the accepted embedded 2026-2028 NYSE calendar snapshot and become `unknown` outside that coverage.
 
-Market data is disabled by default. Broker access, account synchronization, signals, alerts, orders, execution, AI research, additional symbols, extended hours, and trade-to-bar aggregation are not implemented. Execution remains disabled in every mode.
+Market data and signal monitoring are both disabled by default. Signal monitoring has one explicit `monitor` mode and remains observation-only. Broker access, account synchronization, portfolio state, alerts, orders, execution, AI research, additional symbols, extended hours, and trade-to-bar aggregation are not implemented. Execution remains disabled in every mode.
 
-Phase 3 is planned, not implemented. It completes the first vertical slice with one versioned breakout-plus-volume observation, durable evidence, deterministic replay, and truthful terminal explanation before the project adds paper-account synchronization.
+The user explicitly reprioritized Phase 3 implementation ahead of the remaining P2-11 provider-bar demonstration. That authorization permits the code to exist; it does not waive the dependency or validation criteria. The credential-free `npm run verify:phase3` technical matrix has passed CI, disposable-database migrations and replay, service restart, live canonical-revision processing, configuration rollover, bounded disable drain, persisted status, and cleanup. No Phase 3 story or phase exit is complete yet because the credential-gated provider smoke still must observe normalized bars for both AAPL and SPY.
 
 ### Prerequisites
 
@@ -36,12 +38,14 @@ npm ci
 apps/api/                  Fastify health API
 apps/web/                  Next.js foundation status page
 workers/market-data/       Alpaca, recovery, delivery, persistence, replay, and status adapters
+workers/signals/           Durable canonical-revision processing, replay persistence, and status
 packages/domain/           Framework-free validated domain primitives
 packages/market-data/      Provider-neutral one-minute-bar and session contracts
+packages/signals/          Pure exact feature, signal, transition, and replay behavior
 packages/config/           Environment validation and safe diagnostics
 packages/observability/    Structured logs, metrics, traces, and redaction
 packages/test-utils/       Deterministic test builders
-infrastructure/postgres/   Versioned market-data migrations
+infrastructure/postgres/   Versioned application-owned migrations
 infrastructure/            Pinned local Compose services and operating notes
 docs/adr/                  Accepted architecture decisions
 user-stories/              Phase stories and implementation notes
@@ -59,14 +63,14 @@ user-stories/              Phase stories and implementation notes
 | `npm test`              | Run deterministic unit tests once.                 |
 | `npm run test:watch`    | Run unit tests in watch mode.                      |
 | `npm run test:coverage` | Run tests and write diagnostic V8 coverage.        |
-| `npm run build`         | Build shared packages, API, web app, and worker.   |
+| `npm run build`         | Build shared packages, API, web app, and workers.  |
 | `npm run ci`            | Reproduce the complete CI quality gate locally.    |
 
 ### Market-data commands
 
 | Command                                | Purpose                                                                    |
 | -------------------------------------- | -------------------------------------------------------------------------- |
-| `npm run market-data:migrate`          | Apply or checksum-check versioned PostgreSQL migrations.                   |
+| `npm run db:migrate`                   | Apply or checksum-check versioned PostgreSQL migrations.                   |
 | `npm run market-data:recording:verify` | Verify the checked-in synthetic portable recording and checksum.           |
 | `npm run market-data:replay`           | Replay the verified fixture through the Redis/persistence boundary.        |
 | `npm run market-data:status`           | Render persisted AAPL/SPY bar-close and operational status.                |
@@ -77,6 +81,24 @@ The normal CI and fixture/replay paths do not require financial credentials or a
 
 The implementation and recorded offline automated/static checks for P2-01 through P2-10 are complete. `npm run verify:phase2` has also completed the integrated Redis/TimescaleDB restart path on a healthy Docker Linux engine. One P2-11 demonstration remains pending: `npm run market-data:provider-smoke` must observe actual AAPL/SPY bars with valid credentials. That provider result is not implied by normal CI, and Phase 2 must not be reported as fully verified until it passes.
 
+### Signal commands
+
+| Command                           | Purpose                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `npm run dev:signals`             | Run the dedicated signal worker; disabled mode only freezes/drains captured debt.           |
+| `npm run start:signals`           | Build and start the signal worker.                                                          |
+| `npm run signal:recording:verify` | Verify the credential-free Phase 3 catalog, schedule, manifest, and output.                 |
+| `npm run signal:replay`           | Persist the verified synthetic scenario into its isolated PostgreSQL replay run.            |
+| `npm run signal:replay:inspect`   | Inspect one explicitly named replay target without mixing it into live status.              |
+| `npm run signal:status`           | Render the selected persisted live signal run and worker health.                            |
+| `npm run verify:phase3`           | Run the credential-free technical Phase 3 CI, service, replay, restart, and cleanup matrix. |
+
+The signal worker accepts only committed PostgreSQL canonical revisions. A monitoring run freezes its configuration and semantic versions, owns a durable cursor, and advances that cursor atomically with append-only evidence and run-scoped transitions. Enabling or rolling over live capture audits open paper-writer capability rows before mutating run state. A missing legacy row, retired or incompatible revision/freshness/data-quality capability, or future-dated heartbeat blocks cutover; an exact accepted row whose lease expired is treated as an inactive crashed writer. During capture, the database also fences each canonical commit by the fresh current persistence-writer session while allowing a replacement process to drain pending Redis entries from an expired producer session. A deferred commit-time check prevents a writer blocked on the revision counter from outliving its lease and committing stale work.
+
+The Phase 3 recording and replay core is credential-free and separately versioned from the immutable Phase 2 recording. It verifies catalog, schedule, manifest, and expected-output checksums before persisting an isolated replay target. Pass a target to inspection with `npm run signal:replay:inspect -- <target-id>`; default `signal:status` selects only live-journal state.
+
+`npm run verify:phase3` runs technical credential-free validation: root CI and dependency audit, recording verification, local service health, repeated migrations, two isolated clean replay targets, replay into existing state, an interrupted/restarted replay across a service restart, live canonical-revision processing and restart, replay/live inspection, and bounded cleanup of temporary databases while preserving named volumes. The current implementation passed that matrix and deliberately reported `phaseExit: blocked_on_provider_smoke`; the synthetic technical result cannot satisfy or imply the still-pending P2-11 AAPL/SPY provider observation, so no Phase 3 story completion note exists yet.
+
 ### Local services
 
 Copy `.env.example` to `.env` only when local overrides are needed. Never commit `.env`.
@@ -84,13 +106,13 @@ Copy `.env.example` to `.env` only when local overrides are needed. Never commit
 ```bash
 npm run services:up
 npm run services:check
-npm run market-data:migrate
+npm run db:migrate
 npm run services:stop
 ```
 
 `npm run services:down` removes containers and the Compose network but preserves named volumes. `npm run services:reset` is intentionally destructive: it also deletes local database and Redis volumes.
 
-Migrations are non-destructive and checksum protected: rerunning them checks previously applied content rather than resetting data. Run `npm run verify:foundation` for the retained Phase 1 check or `npm run verify:phase2` for the credential-free Phase 2 handoff. Verification must preserve volumes and stop bounded process resources even when a later step fails.
+Migrations are non-destructive and checksum protected: rerunning them checks previously applied content rather than resetting data. They now own both the Phase 2 market-data schema and the Phase 3 revision-journal, signal-run, evidence, replay, and worker-status schema. Run `npm run verify:foundation` for the retained Phase 1 check, `npm run verify:phase2` for the credential-free Phase 2 handoff, or `npm run verify:phase3` for the technical credential-free Phase 3 matrix. Verification must preserve volumes and stop bounded process resources even when a later step fails.
 
 ### Run the process shells
 
@@ -98,6 +120,7 @@ Migrations are non-destructive and checksum protected: rerunning them checks pre
 npm run dev:api     # http://127.0.0.1:3001/health
 npm run dev:web     # http://127.0.0.1:3000
 npm run dev:worker  # safe worker shell; market data remains disabled by default
+npm run dev:signals # safe signal shell; signal monitoring remains disabled by default
 ```
 
 All health and status output identifies the environment and keeps order execution disabled. Fixture, replay, migration, and status work never opens a provider or broker connection.
@@ -295,7 +318,7 @@ Performance work should be driven by measurements. Correctness, reproducibility,
 - Persist bars and record an event stream that can be replayed.
 - Surface connection health and data freshness.
 
-### Phase 3: First deterministic signal
+### Phase 3: First deterministic signal (implemented; provider dependency pending)
 
 - Accept exact-decimal arithmetic, signal-definition, and canonical-input semantics.
 - Implement one versioned breakout-plus-volume observation for AAPL and SPY.
@@ -371,7 +394,9 @@ Strategy success is not measured only by profit and loss. Track latency, data ga
 
 ## Repository status
 
-Phases 1 and 2 establish the development and implemented market-data foundations. The slice defines exact application-owned events, controlled Alpaca IEX ingestion, bounded recovery, at-least-once delivery, durable canonical bars and audit history, deterministic portable replay, and terminal status. The default remains provider-disabled and execution-disabled. The P2-11 service/restart verification has passed; the credential-gated provider smoke must also observe both approved symbols before the Phase 2 exit is reported as fully verified. Phase 3 is a planned docs-only backlog for the first deterministic signal and remains blocked on that provider gate; no Phase 3 runtime, persistence, or configuration exists yet. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
+Phases 1 and 2 establish the development and market-data foundations. The Phase 3 workspace now implements exact application-owned signal contracts, bounded deterministic feature windows, `breakout_plus_volume.v1`, append-only evidence, durable revision processing, replay, and terminal status. The default remains provider-disabled, signal-disabled, and execution-disabled.
+
+Implementation and technical verification are not the same as phase completion. The Phase 3 credential-free CI, PostgreSQL migration/replay, service-restart, and live canonical-revision matrix has passed, but P2-11 still lacks the credential-gated observation of both approved provider symbols. Accordingly, no Phase 3 story has a completion note and Phase 3 must not be reported as complete. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
 
 ## External documentation
 

@@ -82,25 +82,33 @@ The governing implementation order and the repository's first vertical slice pla
 
 Phase 2 supplies application-owned exact bar events, committed canonical AAPL/SPY bars, session/gap/freshness classifications, at-least-once Redis delivery, append-only audit history, injected clocks, and verified portable-recording interfaces. It deliberately supplies no decimal arithmetic, feature state, signal contract, canonical-bar-to-signal handoff, signal persistence, or signal presentation.
 
-The Phase 3 backlog may be reviewed while P2-11 is pending, but implementation must not begin and Phase 3 cannot exit until the credential-gated provider smoke observes normalized AAPL and SPY bars. `npm run verify:phase2` has passed on healthy Redis/TimescaleDB services. A naturally occurring live signal is not required; provider validation proves the input boundary and synthetic replay proves signal behavior.
+The original backlog required the P2-11 provider demonstration before implementation. The user explicitly reprioritized Phase 3 implementation while that demonstration is pending, so the code may be reviewed and exercised now. The reprioritization does not satisfy the dependency: no Phase 3 story or phase exit can be complete until the credential-gated provider smoke observes normalized AAPL and SPY bars. `npm run verify:phase2` has passed on healthy Redis/TimescaleDB services. A naturally occurring live signal is not required; provider validation proves the input boundary and synthetic replay proves signal behavior.
 
 ### Story Order
 
-| Story                                                   | Outcome                                             | Depends on          | Status                    |
-| ------------------------------------------------------- | --------------------------------------------------- | ------------------- | ------------------------- |
-| [P3-01](./phase-3-01-signal-decisions-and-contracts.md) | Exact-decimal signal semantics and contracts        | P2-11 exit          | Planned; blocked on P2-11 |
-| [P3-02](./phase-3-02-safe-signal-configuration.md)      | Immutable versioned signal configuration            | P3-01               | Planned                   |
-| [P3-03](./phase-3-03-deterministic-feature-windows.md)  | Data-quality-aware rolling feature state            | P3-01, P3-02        | Planned                   |
-| [P3-04](./phase-3-04-breakout-volume-signal.md)         | One explainable breakout-plus-volume rule           | P3-01 through P3-03 | Planned                   |
-| [P3-05](./phase-3-05-persist-signal-evidence.md)        | Append-only evaluations and complete evidence       | P3-03, P3-04        | Planned                   |
-| [P3-06](./phase-3-06-process-canonical-bars.md)         | Recoverable committed-bar signal processing         | P3-03 through P3-05 | Planned                   |
-| [P3-07](./phase-3-07-replay-signal-sessions.md)         | Deterministic signal replay and correction recovery | P3-05, P3-06        | Planned                   |
-| [P3-08](./phase-3-08-terminal-signal-status.md)         | Truthful terminal signal explanation and health     | P3-05 through P3-07 | Planned                   |
-| [P3-09](./phase-3-09-phase-verification.md)             | Reproducible Phase 3 handoff                        | P3-01 through P3-08 | Planned                   |
+| Story                                                   | Outcome                                             | Depends on          | Status                                          |
+| ------------------------------------------------------- | --------------------------------------------------- | ------------------- | ----------------------------------------------- |
+| [P3-01](./phase-3-01-signal-decisions-and-contracts.md) | Exact-decimal signal semantics and contracts        | P2-11 exit          | Implemented; technical pass; dependency pending |
+| [P3-02](./phase-3-02-safe-signal-configuration.md)      | Immutable versioned signal configuration            | P3-01               | Implemented; technical pass; dependency pending |
+| [P3-03](./phase-3-03-deterministic-feature-windows.md)  | Data-quality-aware rolling feature state            | P3-01, P3-02        | Implemented; technical pass; dependency pending |
+| [P3-04](./phase-3-04-breakout-volume-signal.md)         | One explainable breakout-plus-volume rule           | P3-01 through P3-03 | Implemented; technical pass; dependency pending |
+| [P3-05](./phase-3-05-persist-signal-evidence.md)        | Append-only evaluations and complete evidence       | P3-03, P3-04        | Implemented; technical pass; dependency pending |
+| [P3-06](./phase-3-06-process-canonical-bars.md)         | Recoverable committed-bar signal processing         | P3-03 through P3-05 | Implemented; technical pass; dependency pending |
+| [P3-07](./phase-3-07-replay-signal-sessions.md)         | Deterministic signal replay and correction recovery | P3-05, P3-06        | Implemented; technical pass; dependency pending |
+| [P3-08](./phase-3-08-terminal-signal-status.md)         | Truthful terminal signal explanation and health     | P3-05 through P3-07 | Implemented; technical pass; dependency pending |
+| [P3-09](./phase-3-09-phase-verification.md)             | Reproducible Phase 3 handoff                        | P3-01 through P3-08 | Technical verifier passed; dependency pending   |
 
-Implementation notes are added under `user-stories/notes/` only when a story's acceptance criteria and validation pass.
+### Current Implementation Evidence
 
-Every Phase 3 story transitively inherits the P2-11 implementation block; P3-01 shows the direct dependency in the table.
+- ADRs 0009-0011 and `@daily-trader/signals` implement bounded string-only exact arithmetic, fixed semantic/configuration identities, deterministic feature windows, one `breakout_plus_volume.v1` rule, run-scoped transitions, and a separately versioned replay core.
+- The generalized migration and market-data repository implement frozen ledger quality metadata, the canonical-revision journal, append-only signal evidence, signal runs/cursors, replay membership, and a leased writer-capability handshake for atomic live-run cutover.
+- `workers/signals/` implements monitoring-only durable journal processing, same-configuration resume and configuration rollover, replay persistence, worker health, and terminal status without a provider, Redis, portfolio, broker, alert, AI, order, or execution connection.
+- `npm run verify:phase3` passed credential-free CI, dependency audit, repeated disposable-database migrations, two clean replay targets, repeat into existing state, exact interrupted-prefix preservation across service restart, live canonical-revision processing and restart, configuration rollover, bounded disable drain, persisted live/replay status, and bounded cleanup. It deliberately reported the phase exit blocked on provider smoke after technical success.
+- The Docker/PostgreSQL Phase 3 service, clean-target replay, existing-state replay, interrupted/restart, and live-worker technical acceptance paths have passed. P2-11's credential-gated AAPL/SPY provider-bar observation remains pending, so the stories and phase exit remain incomplete.
+
+Implementation notes are added under `user-stories/notes/` only when a story's acceptance criteria, dependencies, and validation pass. Code presence and unit/static checks alone do not justify a completion note.
+
+Every Phase 3 story transitively inherits the unresolved P2-11 completion dependency; P3-01 shows the direct dependency in the table. The user-approved reprioritization explains why implementation is present despite that block.
 
 ### Definition of Done
 

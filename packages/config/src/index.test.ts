@@ -53,6 +53,25 @@ describe('loadConfig', () => {
           jitterPercent: 20,
         },
       },
+      signal: {
+        mode: 'disabled',
+        configuration: {
+          signalDefinitionVersion: 'breakout_plus_volume.v1',
+          configurationVersion: 'phase3-v1',
+          lookbackBars: 20,
+          volumeMultiplier: '1.5',
+          freshnessThresholdMs: 120_000,
+        },
+        operational: {
+          journalPollIntervalMs: 250,
+          claimBatchSize: 50,
+          queueCapacity: 1_000,
+          retry: { maxAttempts: 5, baseDelayMs: 100, maxDelayMs: 5_000 },
+          backlogLimit: 10_000,
+          statementTimeoutMs: 10_000,
+          shutdownTimeoutMs: 10_000,
+        },
+      },
       trading: {
         brokerMode: 'paper',
         executionEnabled: false,
@@ -99,6 +118,24 @@ describe('loadConfig', () => {
       MARKET_DATA_RECONNECT_BASE_DELAY_MS: '250',
       MARKET_DATA_RECONNECT_MAX_DELAY_MS: '5000',
       MARKET_DATA_RECONNECT_JITTER_PERCENT: '10',
+      SIGNAL_MODE: 'monitor',
+      SIGNAL_CONFIGURATION_VERSION: 'phase3-test-v1',
+      SIGNAL_DEFINITION: 'breakout_plus_volume.v1',
+      SIGNAL_SYMBOLS: 'AAPL,SPY',
+      SIGNAL_LOOKBACK_WINDOW: '5',
+      SIGNAL_VOLUME_MULTIPLIER: '2.25',
+      SIGNAL_JOURNAL_POLL_INTERVAL_MS: '100',
+      SIGNAL_CLAIM_BATCH_SIZE: '10',
+      SIGNAL_QUEUE_CAPACITY: '20',
+      SIGNAL_RETRY_MAX_ATTEMPTS: '3',
+      SIGNAL_RETRY_BASE_DELAY_MS: '50',
+      SIGNAL_RETRY_MAX_DELAY_MS: '1000',
+      SIGNAL_RETRY_JITTER_PERCENT: '10',
+      SIGNAL_BACKLOG_LIMIT: '40',
+      SIGNAL_STATEMENT_TIMEOUT_MS: '1000',
+      SIGNAL_CLAIM_LEASE_MS: '5000',
+      SIGNAL_CLAIM_RENEW_INTERVAL_MS: '1000',
+      SIGNAL_SHUTDOWN_TIMEOUT_MS: '3000',
       PAPER_BROKER_BASE_URL: 'https://paper.example.invalid',
       PAPER_BROKER_API_KEY: 'paper-key-value',
       PAPER_BROKER_API_SECRET: 'paper-secret-value',
@@ -132,6 +169,22 @@ describe('loadConfig', () => {
       },
     });
     expect(config.providers.paperBroker.apiKey).toBe('paper-key-value');
+    expect(config.signal).toMatchObject({
+      mode: 'monitor',
+      configuration: {
+        configurationVersion: 'phase3-test-v1',
+        lookbackBars: 5,
+        volumeMultiplier: '2.25',
+        freshnessThresholdMs: 180_000,
+      },
+      operational: {
+        claimBatchSize: 10,
+        queueCapacity: 20,
+        backlogLimit: 40,
+        claimLeaseMs: 5_000,
+        claimRenewIntervalMs: 1_000,
+      },
+    });
   });
 
   it('freezes market-data configuration and the exact Phase 2 subscription scope', () => {
@@ -142,6 +195,11 @@ describe('loadConfig', () => {
     expect(Object.isFrozen(config.marketData)).toBe(true);
     expect(Object.isFrozen(config.marketData.symbols)).toBe(true);
     expect(Object.isFrozen(config.marketData.reconnect)).toBe(true);
+    expect(Object.isFrozen(config.signal)).toBe(true);
+    expect(Object.isFrozen(config.signal.configuration)).toBe(true);
+    expect(Object.isFrozen(config.signal.configuration.scope)).toBe(true);
+    expect(Object.isFrozen(config.signal.operational)).toBe(true);
+    expect(Object.isFrozen(config.signal.operational.retry)).toBe(true);
   });
 
   it('requires service locations outside local and test environments', () => {
@@ -295,6 +353,57 @@ describe('loadConfig', () => {
     expect(connectorCreated).toBe(false);
   });
 
+  it.each([
+    ['SIGNAL_MODE', 'execute'],
+    ['SIGNAL_DEFINITION', 'another_signal.v1'],
+    ['SIGNAL_SYMBOLS', 'SPY,AAPL'],
+    ['SIGNAL_SYMBOLS', 'AAPL,SPY,QQQ'],
+    ['SIGNAL_LOOKBACK_WINDOW', '0'],
+    ['SIGNAL_LOOKBACK_WINDOW', '391'],
+    ['SIGNAL_VOLUME_MULTIPLIER', '1.50'],
+    ['SIGNAL_VOLUME_MULTIPLIER', '1e1'],
+    ['SIGNAL_VOLUME_MULTIPLIER', '10.1'],
+    ['SIGNAL_CLAIM_BATCH_SIZE', '0'],
+    ['SIGNAL_BACKLOG_LIMIT', '100001'],
+  ])('rejects unsupported signal configuration in %s', (setting, value) => {
+    expect(() => loadConfig({ [setting]: value })).toThrowError(ConfigurationError);
+  });
+
+  it('rejects unknown signal settings and unsafe operational relationships', () => {
+    expect(() => loadConfig({ SIGNAL_DYNAMIC_THRESHOLD: '2' })).toThrowError(
+      'SIGNAL_DYNAMIC_THRESHOLD',
+    );
+    expect(() =>
+      loadConfig({ SIGNAL_CLAIM_BATCH_SIZE: '11', SIGNAL_QUEUE_CAPACITY: '10' }),
+    ).toThrowError('SIGNAL_CLAIM_BATCH_SIZE');
+    expect(() =>
+      loadConfig({ SIGNAL_QUEUE_CAPACITY: '101', SIGNAL_BACKLOG_LIMIT: '100' }),
+    ).toThrowError('SIGNAL_QUEUE_CAPACITY');
+    expect(() =>
+      loadConfig({ SIGNAL_RETRY_BASE_DELAY_MS: '2000', SIGNAL_RETRY_MAX_DELAY_MS: '1000' }),
+    ).toThrowError('SIGNAL_RETRY_BASE_DELAY_MS');
+    expect(() =>
+      loadConfig({ SIGNAL_CLAIM_LEASE_MS: '30000', SIGNAL_CLAIM_RENEW_INTERVAL_MS: '11000' }),
+    ).toThrowError('SIGNAL_CLAIM_RENEW_INTERVAL_MS');
+    expect(() =>
+      loadConfig({
+        SIGNAL_RETRY_MAX_DELAY_MS: '20000',
+        SIGNAL_RETRY_JITTER_PERCENT: '50',
+        SIGNAL_STATEMENT_TIMEOUT_MS: '10000',
+        SIGNAL_CLAIM_LEASE_MS: '30000',
+      }),
+    ).toThrowError('SIGNAL_CLAIM_LEASE_MS');
+  });
+
+  it('fails invalid signal configuration before a database connection can be created', () => {
+    let databaseConnected = false;
+    expect(() => {
+      loadConfig({ SIGNAL_MODE: 'monitor', SIGNAL_VOLUME_MULTIPLIER: '1000' });
+      databaseConnected = true;
+    }).toThrowError(ConfigurationError);
+    expect(databaseConnected).toBe(false);
+  });
+
   it('keeps live settings separate and rejects them in the current paper-only phase', () => {
     const liveSecret = 'live-secret-must-stay-private';
 
@@ -376,6 +485,15 @@ describe('safe diagnostics', () => {
     expect(diagnostics.marketData).not.toHaveProperty('websocketUrl');
     expect(diagnostics.marketData).not.toHaveProperty('apiKey');
     expect(diagnostics.marketData).not.toHaveProperty('apiSecret');
+    expect(diagnostics.signal).toMatchObject({
+      mode: 'disabled',
+      signalDefinitionVersion: 'breakout_plus_volume.v1',
+      configurationVersion: 'phase3-v1',
+      lookbackBars: 20,
+      volumeMultiplier: '1.5',
+    });
+    expect(diagnostics.signal).not.toHaveProperty('apiKey');
+    expect(diagnostics.signal).not.toHaveProperty('apiSecret');
   });
 
   it('redacts credential-like environment fields', () => {

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "noEmit": true,
+    "paths": {
+      "@daily-trader/domain": ["../domain/src/index.ts"],
+      "@daily-trader/market-data": ["../market-data/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "fixtures/**/*.js"]
+}

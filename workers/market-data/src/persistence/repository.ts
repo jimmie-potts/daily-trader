@@ -1,9 +1,11 @@
 import { createUtcTimestamp, type UtcTimestamp } from '@daily-trader/domain';
 import {
+  CANONICAL_REVISION_SCHEMA_VERSION,
   MARKET_DATA_ENTITLEMENT,
   MARKET_DATA_FEED,
   FRESHNESS_THRESHOLD_MS,
   MARKET_DATA_PROVIDER,
+  MARKET_DATA_QUALITY_POLICY_VERSION,
   MARKET_DATA_SCHEMA_VERSION,
   NYSE_CORE_SESSION_CALENDAR,
   PHASE_2_SYMBOLS,
@@ -11,6 +13,8 @@ import {
   addUtcMilliseconds,
   assessIntervalGap,
   classifyMarketDataFreshness,
+  createCanonicalRevision,
+  decideCanonicalTransition,
   deserializeOneMinuteBarEvent,
   isLateArrival,
   serializeOneMinuteBarEvent,
@@ -60,6 +64,14 @@ export interface CreateIngestionSessionInput {
 export interface MarketDataRepositoryOptions {
   readonly calendar?: MarketSessionCalendar;
   readonly freshnessThresholdMs?: number;
+  readonly writerCapabilityLeaseMs?: number;
+  readonly monotonicNow?: () => number;
+  readonly onCanonicalRevisionTiming?: (timing: CanonicalRevisionTiming) => void;
+}
+
+export interface CanonicalRevisionTiming {
+  readonly counterLockWaitMs: number;
+  readonly transactionDurationMs: number;
 }
 
 export interface ReplayIngestionSessionState {
@@ -95,6 +107,7 @@ export interface LatestPersistedBar {
 }
 
 export type MarketDataPersistenceErrorCode =
+  | 'capacity_exceeded'
   | 'connection_failed'
   | 'entry_invalid'
   | 'query_failed'
@@ -102,7 +115,8 @@ export type MarketDataPersistenceErrorCode =
   | 'session_invalid'
   | 'session_not_open'
   | 'shutdown_failed'
-  | 'stored_data_invalid';
+  | 'stored_data_invalid'
+  | 'writer_contract_unavailable';
 
 export class MarketDataPersistenceError extends Error {
   public readonly code: MarketDataPersistenceErrorCode;
@@ -117,6 +131,11 @@ export class MarketDataPersistenceError extends Error {
 const SESSION_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const CONFIGURATION_VERSION = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const EVENT_ID = /^[0-9a-f]{64}$/u;
+const NONNEGATIVE_INTEGER_TEXT = /^(?:0|[1-9][0-9]*)$/u;
+const WRITER_CAPABILITY_LOCK_KEYS = Object.freeze(['XNAS:AAPL|1m', 'ARCX:SPY|1m']);
+const DEFAULT_WRITER_CAPABILITY_LEASE_MS = 90_000;
+const MINIMUM_WRITER_CAPABILITY_LEASE_MS = 3_000;
+const MAXIMUM_WRITER_CAPABILITY_LEASE_MS = 900_000;
 
 const CREATE_SESSION_SQL = `
   /* market-data:create-session */
@@ -162,6 +181,75 @@ const CLOSE_SESSION_SQL = `
   WHERE session_id = $2 AND ended_at IS NULL
 `;
 
+const SELECT_SESSION_MODE_SQL = `
+  /* market-data:select-session-mode */
+  SELECT mode
+  FROM market_data_ingestion_sessions
+  WHERE session_id = $1
+`;
+
+const SELECT_OPEN_PAPER_SESSION_FOR_UPDATE_SQL = `
+  /* market-data:select-open-paper-session-for-update */
+  SELECT 1 AS open
+  FROM market_data_ingestion_sessions
+  WHERE session_id = $1 AND mode = 'paper' AND ended_at IS NULL
+  FOR UPDATE
+`;
+
+const REGISTER_WRITER_CAPABILITY_SQL = `
+  /* market-data:register-writer-capability */
+  INSERT INTO market_data_writer_capabilities (
+    session_id,
+    session_mode,
+    capability_state,
+    revision_contract_version,
+    expires_at,
+    freshness_threshold_ms,
+    data_quality_policy_version
+  ) VALUES (
+    $1,
+    'paper',
+    'accepted',
+    $2,
+    CURRENT_TIMESTAMP + ($3::integer * interval '1 millisecond'),
+    $4,
+    $5
+  )
+`;
+
+const RENEW_WRITER_CAPABILITY_SQL = `
+  /* market-data:renew-writer-capability */
+  UPDATE market_data_writer_capabilities AS capability
+  SET heartbeat_at = CURRENT_TIMESTAMP,
+      expires_at = CURRENT_TIMESTAMP + ($3::integer * interval '1 millisecond'),
+      updated_at = CURRENT_TIMESTAMP
+  FROM market_data_ingestion_sessions AS session
+  WHERE capability.session_id = $1
+    AND capability.session_id = session.session_id
+    AND capability.session_mode = 'paper'
+    AND session.mode = 'paper'
+    AND session.ended_at IS NULL
+    AND capability.capability_state = 'accepted'
+    AND capability.revision_contract_version = $2
+    AND capability.freshness_threshold_ms = $4
+    AND capability.data_quality_policy_version = $5
+    AND capability.retired_at IS NULL
+    AND capability.expires_at > CURRENT_TIMESTAMP
+`;
+
+const RETIRE_WRITER_CAPABILITY_SQL = `
+  /* market-data:retire-writer-capability */
+  UPDATE market_data_writer_capabilities
+  SET capability_state = 'retired',
+      retired_at = GREATEST(CURRENT_TIMESTAMP, heartbeat_at),
+      updated_at = GREATEST(CURRENT_TIMESTAMP, heartbeat_at)
+  WHERE session_id = $1
+    AND session_mode = 'paper'
+    AND capability_state = 'accepted'
+    AND revision_contract_version = $2
+    AND retired_at IS NULL
+`;
+
 const SELECT_OPEN_SESSION_SQL = `
   /* market-data:select-open-session */
   SELECT ended_at IS NULL AS is_open
@@ -180,6 +268,36 @@ const SELECT_DUPLICATE_SQL = `
 const LOCK_MARKET_SERIES_SQL = `
   /* market-data:lock-market-series */
   SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+`;
+
+const SET_CANONICAL_REVISION_WRITER_CONTRACT_SQL = `
+  /* market-data:set-canonical-revision-writer-contract */
+  SELECT set_config('daily_trader.canonical_revision_contract', $1, true),
+         set_config('daily_trader.market_data_writer_session_id', $2, true)
+`;
+
+const ASSERT_CANONICAL_WRITER_CAPABILITY_SQL = `
+  /* market-data:assert-canonical-writer-capability */
+  SELECT NOT EXISTS (SELECT 1 FROM signal_runs WHERE capture_active)
+    OR EXISTS (
+      SELECT 1
+      FROM signal_runs AS run
+      JOIN market_data_ingestion_sessions AS session ON true
+      JOIN market_data_writer_capabilities AS capability
+        ON capability.session_id = session.session_id
+       AND capability.session_mode = 'paper'
+      WHERE session.session_id = $1
+        AND run.capture_active
+        AND session.mode = 'paper'
+        AND session.ended_at IS NULL
+        AND capability.capability_state = 'accepted'
+        AND capability.revision_contract_version = $2
+        AND capability.freshness_threshold_ms = run.freshness_threshold_ms
+        AND capability.data_quality_policy_version = run.data_quality_policy_version
+        AND capability.retired_at IS NULL
+        AND capability.heartbeat_at <= clock_timestamp()
+        AND capability.expires_at > clock_timestamp()
+    ) AS available
 `;
 
 const SELECT_SESSION_EVENT_LINK_SQL = `
@@ -217,11 +335,34 @@ const SELECT_LATEST_SERIES_EVENT_SQL = `
   LIMIT 1
 `;
 
+const SELECT_PRIOR_CANONICAL_BAR_SQL = `
+  /* market-data:select-prior-canonical-bar */
+  SELECT ledger.event_json
+  FROM market_data_one_minute_bars AS bar
+  INNER JOIN market_data_event_ledger AS ledger ON ledger.event_id = bar.event_id
+  WHERE bar.instrument_symbol = $1
+    AND bar.instrument_venue = $2
+    AND bar.bar_start = $3
+`;
+
+const SELECT_CANONICAL_SERIES_FRONTIER_SQL = `
+  /* market-data:select-canonical-series-frontier */
+  SELECT ledger.event_json
+  FROM market_data_one_minute_bars AS bar
+  INNER JOIN market_data_event_ledger AS ledger ON ledger.event_id = bar.event_id
+  WHERE bar.instrument_symbol = $1
+    AND bar.instrument_venue = $2
+  ORDER BY bar.bar_start DESC, bar.event_id DESC
+  LIMIT 1
+`;
+
 const INSERT_LEDGER_EVENT_SQL = `
   /* market-data:insert-ledger-event */
   INSERT INTO market_data_event_ledger (
     event_id,
     session_id,
+    freshness_threshold_ms,
+    data_quality_policy_version,
     schema_version,
     event_type,
     ordering_key,
@@ -253,7 +394,8 @@ const INSERT_LEDGER_EVENT_SQL = `
   ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-    $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
+    $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+    $31, $32
   )
 `;
 
@@ -337,6 +479,59 @@ const UPSERT_CANONICAL_BAR_SQL = `
   RETURNING event_id
 `;
 
+const LOCK_CANONICAL_REVISION_COUNTER_SQL = `
+  /* market-data:lock-canonical-revision-counter */
+  SELECT next_position::text AS next_position
+  FROM market_data_canonical_revision_counter
+  WHERE singleton
+  FOR UPDATE
+`;
+
+const SELECT_ACTIVE_CAPTURE_RUN_SQL = `
+  /* market-data:select-active-capture-run */
+  SELECT run.run_id, run.backlog_limit,
+    (
+      SELECT count(*)::text
+      FROM market_data_canonical_revisions AS revision
+      WHERE revision.run_id = run.run_id
+        AND revision.position > run.cursor_position
+    ) AS backlog_count
+  FROM signal_runs AS run
+  WHERE run.capture_active
+  FOR SHARE
+`;
+
+const ADVANCE_CANONICAL_REVISION_COUNTER_SQL = `
+  /* market-data:advance-canonical-revision-counter */
+  UPDATE market_data_canonical_revision_counter
+  SET next_position = next_position + 1
+  WHERE singleton AND next_position::text = $1
+`;
+
+const INSERT_CANONICAL_REVISION_SQL = `
+  /* market-data:insert-canonical-revision */
+  INSERT INTO market_data_canonical_revisions (
+    position,
+    revision_id,
+    run_id,
+    schema_version,
+    operation,
+    ordering_key,
+    instrument_symbol,
+    instrument_venue,
+    bar_start,
+    previous_event_id,
+    new_event_id,
+    arrival_classification,
+    gap_state,
+    historical,
+    filled_known_gap
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    $11, $12, $13, $14, $15
+  )
+`;
+
 const SELECT_LATEST_BARS_SQL = `
   /* market-data:select-latest-bars */
   SELECT DISTINCT ON (bar.instrument_symbol)
@@ -389,6 +584,22 @@ function validateSessionMode(value: string): void {
 function stringField(row: SqlRow, field: string): string {
   const value = row[field];
   if (typeof value !== 'string') {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  return value;
+}
+
+function positiveIntegerField(row: SqlRow, field: string): number {
+  const value = row[field];
+  if (!Number.isSafeInteger(value) || typeof value !== 'number' || value < 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  return value;
+}
+
+function nonnegativeIntegerTextField(row: SqlRow, field: string): string {
+  const value = stringField(row, field);
+  if (!NONNEGATIVE_INTEGER_TEXT.test(value)) {
     throw new MarketDataPersistenceError('stored_data_invalid');
   }
   return value;
@@ -554,10 +765,13 @@ function ledgerValues(
   eventTimeliness: PersistedTimeliness,
   eventGapState: GapState,
   eventJson: string,
+  freshnessThresholdMs: number,
 ): readonly unknown[] {
   return [
     event.eventId,
     sessionId,
+    freshnessThresholdMs,
+    MARKET_DATA_QUALITY_POLICY_VERSION,
     event.schemaVersion,
     event.kind,
     event.orderingKey,
@@ -587,6 +801,141 @@ function ledgerValues(
     event.volume,
     eventJson,
   ];
+}
+
+async function priorCanonicalEvent(
+  client: SqlQueryable,
+  event: OneMinuteBarEvent,
+): Promise<OneMinuteBarEvent | undefined> {
+  const result = await client.query(SELECT_PRIOR_CANONICAL_BAR_SQL, [
+    event.instrument.symbol,
+    event.instrument.venue,
+    event.barStart,
+  ]);
+  if (result.rows.length > 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  const row = result.rows[0];
+  return row === undefined
+    ? undefined
+    : deserializeOneMinuteBarEvent(stringField(row, 'event_json'));
+}
+
+async function isHistoricalCanonicalChange(
+  client: SqlQueryable,
+  event: OneMinuteBarEvent,
+): Promise<boolean> {
+  const result = await client.query(SELECT_CANONICAL_SERIES_FRONTIER_SQL, [
+    event.instrument.symbol,
+    event.instrument.venue,
+  ]);
+  if (result.rows.length > 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  const row = result.rows[0];
+  if (row === undefined) {
+    return false;
+  }
+  const frontier = deserializeOneMinuteBarEvent(stringField(row, 'event_json'));
+  return utcEpochMilliseconds(event.barStart) < utcEpochMilliseconds(frontier.barStart);
+}
+
+async function journalCanonicalChange(
+  client: SqlQueryable,
+  input: {
+    readonly event: OneMinuteBarEvent;
+    readonly previousCanonicalEventId: string | null;
+    readonly ordering: OrderingDecision;
+    readonly historical: boolean;
+    readonly filledKnownGap: boolean;
+    readonly monotonicNow: () => number;
+  },
+): Promise<number | undefined> {
+  const counterLockStartedAt = input.monotonicNow();
+  const counter = await client.query(LOCK_CANONICAL_REVISION_COUNTER_SQL);
+  const counterLockWaitMs = Math.max(0, input.monotonicNow() - counterLockStartedAt);
+  if (counter.rows.length !== 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  const counterRow = counter.rows[0];
+  if (counterRow === undefined) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  const processingPosition = stringField(counterRow, 'next_position');
+
+  const capture = await client.query(SELECT_ACTIVE_CAPTURE_RUN_SQL);
+  if (capture.rows.length > 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  const captureRow = capture.rows[0];
+  if (captureRow === undefined) {
+    return undefined;
+  }
+  const runId = stringField(captureRow, 'run_id');
+  const backlogLimit = positiveIntegerField(captureRow, 'backlog_limit');
+  const backlogCount = nonnegativeIntegerTextField(captureRow, 'backlog_count');
+  if (BigInt(backlogCount) >= BigInt(backlogLimit)) {
+    throw new MarketDataPersistenceError('capacity_exceeded');
+  }
+  const revision = createCanonicalRevision(
+    input.previousCanonicalEventId === null
+      ? {
+          operation: 'insert',
+          processingPosition,
+          logicalBarKey: input.event.orderingKey,
+          previousCanonicalEventId: null,
+          newCanonicalEventId: input.event.eventId,
+          marketEventSchemaVersion: input.event.schemaVersion,
+          arrival: {
+            classification: input.ordering.classification,
+            historical: input.historical,
+            outOfOrder: input.ordering.classification === 'out_of_order',
+          },
+          gap: { state: input.ordering.gap.state, filledKnownGap: input.filledKnownGap },
+        }
+      : {
+          operation: 'replace',
+          processingPosition,
+          logicalBarKey: input.event.orderingKey,
+          previousCanonicalEventId: input.previousCanonicalEventId,
+          newCanonicalEventId: input.event.eventId,
+          marketEventSchemaVersion: input.event.schemaVersion,
+          arrival: {
+            classification: input.ordering.classification,
+            historical: input.historical,
+            outOfOrder: false,
+          },
+          gap: { state: input.ordering.gap.state, filledKnownGap: false },
+        },
+  );
+
+  const advanced = await client.query(ADVANCE_CANONICAL_REVISION_COUNTER_SQL, [
+    revision.processingPosition,
+  ]);
+  if (advanced.rowCount !== 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  const inserted = await client.query(INSERT_CANONICAL_REVISION_SQL, [
+    revision.processingPosition,
+    revision.revisionId,
+    runId,
+    revision.schemaVersion,
+    revision.operation,
+    revision.logicalBarKey,
+    input.event.instrument.symbol,
+    input.event.instrument.venue,
+    input.event.barStart,
+    revision.previousCanonicalEventId,
+    revision.newCanonicalEventId,
+    revision.arrival.classification,
+    revision.gap.state,
+    revision.arrival.historical,
+    revision.gap.filledKnownGap,
+  ]);
+  if (inserted.rowCount !== 1) {
+    throw new MarketDataPersistenceError('stored_data_invalid');
+  }
+  return counterLockWaitMs;
 }
 
 function canonicalBarValues(event: OneMinuteBarEvent): readonly unknown[] {
@@ -634,11 +983,17 @@ export class MarketDataRepository {
   readonly #pool: SqlPool;
   readonly #calendar: MarketSessionCalendar;
   readonly #freshnessThresholdMs: number;
+  readonly #writerCapabilityLeaseMs: number;
+  readonly #monotonicNow: () => number;
+  readonly #onCanonicalRevisionTiming: ((timing: CanonicalRevisionTiming) => void) | undefined;
+  #writerSessionId: string | undefined;
   #closePromise: Promise<void> | undefined;
   #forceClosePromise: Promise<void> | undefined;
 
   public constructor(pool: SqlPool, options: MarketDataRepositoryOptions = {}) {
     const freshnessThresholdMs = options.freshnessThresholdMs ?? FRESHNESS_THRESHOLD_MS;
+    const writerCapabilityLeaseMs =
+      options.writerCapabilityLeaseMs ?? DEFAULT_WRITER_CAPABILITY_LEASE_MS;
     if (
       !Number.isSafeInteger(freshnessThresholdMs) ||
       freshnessThresholdMs < 60_000 ||
@@ -646,9 +1001,19 @@ export class MarketDataRepository {
     ) {
       throw new TypeError('freshnessThresholdMs must be between 60000 and 300000');
     }
+    if (
+      !Number.isSafeInteger(writerCapabilityLeaseMs) ||
+      writerCapabilityLeaseMs < MINIMUM_WRITER_CAPABILITY_LEASE_MS ||
+      writerCapabilityLeaseMs > MAXIMUM_WRITER_CAPABILITY_LEASE_MS
+    ) {
+      throw new TypeError('writerCapabilityLeaseMs must be between 3000 and 900000');
+    }
     this.#pool = pool;
     this.#calendar = options.calendar ?? NYSE_CORE_SESSION_CALENDAR;
     this.#freshnessThresholdMs = freshnessThresholdMs;
+    this.#writerCapabilityLeaseMs = writerCapabilityLeaseMs;
+    this.#monotonicNow = options.monotonicNow ?? (() => performance.now());
+    this.#onCanonicalRevisionTiming = options.onCanonicalRevisionTiming;
   }
 
   public async createIngestionSession(input: CreateIngestionSessionInput): Promise<void> {
@@ -656,19 +1021,63 @@ export class MarketDataRepository {
     validateSessionMode(input.mode);
     validateConfigurationVersion(input.configurationVersion);
     const startedAt = createUtcTimestamp(input.startedAt);
+    const values = [
+      input.sessionId,
+      input.mode,
+      MARKET_DATA_PROVIDER,
+      MARKET_DATA_FEED,
+      MARKET_DATA_ENTITLEMENT,
+      input.configurationVersion,
+      this.#freshnessThresholdMs,
+      startedAt,
+    ] as const;
+    if (input.mode !== 'paper') {
+      try {
+        await this.#pool.query(CREATE_SESSION_SQL, values);
+      } catch (error) {
+        throw translateTransactionError(error);
+      }
+      return;
+    }
+    if (this.#writerSessionId !== undefined) {
+      throw new MarketDataPersistenceError('session_invalid');
+    }
+
+    let client: SqlPoolClient;
     try {
-      await this.#pool.query(CREATE_SESSION_SQL, [
+      client = await this.#pool.connect();
+    } catch {
+      throw new MarketDataPersistenceError('connection_failed');
+    }
+    let transactionStarted = false;
+    try {
+      await client.query('BEGIN');
+      transactionStarted = true;
+      for (const key of WRITER_CAPABILITY_LOCK_KEYS) {
+        await client.query(LOCK_MARKET_SERIES_SQL, [key]);
+      }
+      await client.query(CREATE_SESSION_SQL, values);
+      await client.query(REGISTER_WRITER_CAPABILITY_SQL, [
         input.sessionId,
-        input.mode,
-        MARKET_DATA_PROVIDER,
-        MARKET_DATA_FEED,
-        MARKET_DATA_ENTITLEMENT,
-        input.configurationVersion,
+        CANONICAL_REVISION_SCHEMA_VERSION,
+        this.#writerCapabilityLeaseMs,
         this.#freshnessThresholdMs,
-        startedAt,
+        MARKET_DATA_QUALITY_POLICY_VERSION,
       ]);
+      await client.query('COMMIT');
+      transactionStarted = false;
+      this.#writerSessionId = input.sessionId;
     } catch (error) {
+      if (transactionStarted) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          throw new MarketDataPersistenceError('rollback_failed');
+        }
+      }
       throw translateTransactionError(error);
+    } finally {
+      client.release();
     }
   }
 
@@ -712,6 +1121,20 @@ export class MarketDataRepository {
   public async closeIngestionSession(sessionId: string, endedAt: UtcTimestamp): Promise<void> {
     validateSessionId(sessionId);
     const validatedEndedAt = createUtcTimestamp(endedAt);
+    let selected: SqlQueryResult;
+    try {
+      selected = await this.#pool.query(SELECT_SESSION_MODE_SQL, [sessionId]);
+    } catch (error) {
+      throw translateTransactionError(error);
+    }
+    const selectedRow = selected.rows[0];
+    if (selected.rows.length !== 1 || selectedRow === undefined) {
+      throw new MarketDataPersistenceError('session_not_open');
+    }
+    if (stringField(selectedRow, 'mode') === 'paper') {
+      await this.#closePaperIngestionSession(sessionId, validatedEndedAt);
+      return;
+    }
     let result: SqlQueryResult;
     try {
       result = await this.#pool.query(CLOSE_SESSION_SQL, [validatedEndedAt, sessionId]);
@@ -720,6 +1143,74 @@ export class MarketDataRepository {
     }
     if (result.rowCount !== 1) {
       throw new MarketDataPersistenceError('session_not_open');
+    }
+  }
+
+  public async renewWriterCapability(sessionId: string): Promise<void> {
+    validateSessionId(sessionId);
+    if (sessionId !== this.#writerSessionId) {
+      throw new MarketDataPersistenceError('writer_contract_unavailable');
+    }
+    let result: SqlQueryResult;
+    try {
+      result = await this.#pool.query(RENEW_WRITER_CAPABILITY_SQL, [
+        sessionId,
+        CANONICAL_REVISION_SCHEMA_VERSION,
+        this.#writerCapabilityLeaseMs,
+        this.#freshnessThresholdMs,
+        MARKET_DATA_QUALITY_POLICY_VERSION,
+      ]);
+    } catch (error) {
+      throw translateTransactionError(error);
+    }
+    if (result.rowCount !== 1) {
+      throw new MarketDataPersistenceError('writer_contract_unavailable');
+    }
+  }
+
+  async #closePaperIngestionSession(sessionId: string, endedAt: UtcTimestamp): Promise<void> {
+    let client: SqlPoolClient;
+    try {
+      client = await this.#pool.connect();
+    } catch {
+      throw new MarketDataPersistenceError('connection_failed');
+    }
+    let transactionStarted = false;
+    try {
+      await client.query('BEGIN');
+      transactionStarted = true;
+      for (const key of WRITER_CAPABILITY_LOCK_KEYS) {
+        await client.query(LOCK_MARKET_SERIES_SQL, [key]);
+      }
+      const open = await client.query(SELECT_OPEN_PAPER_SESSION_FOR_UPDATE_SQL, [sessionId]);
+      if (open.rows.length !== 1) {
+        throw new MarketDataPersistenceError('session_not_open');
+      }
+      const retired = await client.query(RETIRE_WRITER_CAPABILITY_SQL, [
+        sessionId,
+        CANONICAL_REVISION_SCHEMA_VERSION,
+      ]);
+      if (retired.rowCount !== 1) {
+        throw new MarketDataPersistenceError('writer_contract_unavailable');
+      }
+      const closed = await client.query(CLOSE_SESSION_SQL, [endedAt, sessionId]);
+      if (closed.rowCount !== 1) {
+        throw new MarketDataPersistenceError('session_not_open');
+      }
+      await client.query('COMMIT');
+      transactionStarted = false;
+      if (this.#writerSessionId === sessionId) this.#writerSessionId = undefined;
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          throw new MarketDataPersistenceError('rollback_failed');
+        }
+      }
+      throw translateTransactionError(error);
+    } finally {
+      client.release();
     }
   }
 
@@ -733,9 +1224,16 @@ export class MarketDataRepository {
     }
 
     let transactionStarted = false;
+    let transactionStartedAt = 0;
+    let counterLockWaitMs: number | undefined;
     try {
       await client.query('BEGIN');
       transactionStarted = true;
+      transactionStartedAt = this.#monotonicNow();
+      await client.query(SET_CANONICAL_REVISION_WRITER_CONTRACT_SQL, [
+        CANONICAL_REVISION_SCHEMA_VERSION,
+        this.#writerSessionId ?? '',
+      ]);
       const event = deserializePersistenceEntry(entry);
 
       await client.query(LOCK_MARKET_SERIES_SQL, [
@@ -783,33 +1281,82 @@ export class MarketDataRepository {
           eventTimeliness,
           ordering.gap.state,
           canonicalJson,
+          this.#freshnessThresholdMs,
         ),
       );
       await client.query(INSERT_SESSION_EVENT_LINK_SQL, [entry.sessionId, event.eventId]);
 
       let canonicalized = false;
       if (isCoreSessionTimeliness(eventTimeliness)) {
-        await client.query(MARK_GAP_OBSERVED_SQL, [
-          event.instrument.symbol,
-          event.instrument.venue,
-          event.barStart,
-        ]);
-        const missingIntervals = missingGapIntervals(ordering.gap, this.#calendar);
-        if (missingIntervals.length > 0) {
-          await client.query(INSERT_GAPS_SQL, [
+        const currentCanonical = await priorCanonicalEvent(client, event);
+        const transition = decideCanonicalTransition({
+          currentCanonical,
+          candidate: event,
+          candidateEligible: true,
+        });
+        if (transition.operation !== 'no_op') {
+          const writerCapability = await client.query(ASSERT_CANONICAL_WRITER_CAPABILITY_SQL, [
+            this.#writerSessionId ?? '',
+            CANONICAL_REVISION_SCHEMA_VERSION,
+          ]);
+          if (writerCapability.rows[0]?.available !== true) {
+            throw new MarketDataPersistenceError('writer_contract_unavailable');
+          }
+          const historical = await isHistoricalCanonicalChange(client, event);
+          const gapObservation = await client.query(MARK_GAP_OBSERVED_SQL, [
             event.instrument.symbol,
             event.instrument.venue,
-            event.receivedAt,
-            event.eventId,
-            missingIntervals,
+            event.barStart,
           ]);
+          if (gapObservation.rowCount !== 0 && gapObservation.rowCount !== 1) {
+            throw new MarketDataPersistenceError('stored_data_invalid');
+          }
+          const filledKnownGap = gapObservation.rowCount === 1;
+          const missingIntervals = missingGapIntervals(ordering.gap, this.#calendar);
+          if (missingIntervals.length > 0) {
+            await client.query(INSERT_GAPS_SQL, [
+              event.instrument.symbol,
+              event.instrument.venue,
+              event.receivedAt,
+              event.eventId,
+              missingIntervals,
+            ]);
+          }
+          const upsert = await client.query(UPSERT_CANONICAL_BAR_SQL, canonicalBarValues(event));
+          const canonicalRow = upsert.rows[0];
+          if (
+            upsert.rowCount !== 1 ||
+            upsert.rows.length !== 1 ||
+            canonicalRow === undefined ||
+            stringField(canonicalRow, 'event_id') !== event.eventId
+          ) {
+            throw new MarketDataPersistenceError('stored_data_invalid');
+          }
+          counterLockWaitMs = await journalCanonicalChange(client, {
+            event,
+            previousCanonicalEventId: transition.previousCanonicalEventId,
+            ordering,
+            historical,
+            filledKnownGap,
+            monotonicNow: this.#monotonicNow,
+          });
+          canonicalized = true;
         }
-        const upsert = await client.query(UPSERT_CANONICAL_BAR_SQL, canonicalBarValues(event));
-        canonicalized = upsert.rowCount === 1;
       }
 
       await client.query('COMMIT');
       transactionStarted = false;
+      if (counterLockWaitMs !== undefined) {
+        const timing = Object.freeze({
+          counterLockWaitMs,
+          transactionDurationMs: Math.max(0, this.#monotonicNow() - transactionStartedAt),
+        });
+        try {
+          this.#onCanonicalRevisionTiming?.(timing);
+        } catch {
+          // A best-effort telemetry observer cannot make an already committed write appear failed.
+        }
+      }
       return Object.freeze({
         event,
         classification: ordering.classification,

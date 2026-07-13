@@ -3,6 +3,7 @@ import { createInstrumentId, type InstrumentId } from '@daily-trader/domain';
 import { MarketDataValidationError, requireString } from './validation.js';
 
 export const MARKET_DATA_SCHEMA_VERSION = 'daily-trader.market-data.one-minute-bar.v1' as const;
+export const MARKET_DATA_QUALITY_POLICY_VERSION = 'daily-trader.market-data.quality.v1' as const;
 export const ONE_MINUTE_INTERVAL = '1m' as const;
 export const MARKET_DATA_PROVIDER = 'alpaca' as const;
 export const MARKET_DATA_FEED = 'iex' as const;

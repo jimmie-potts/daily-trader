@@ -1,6 +1,6 @@
 # P2-10 Implementation Note
 
-- Status: Implemented; integrated replay/provider validation blocked
+- Status: Implemented; provider bar validation pending
 - Implemented: 2026-07-12
 
 ## What Was Implemented
@@ -14,7 +14,7 @@ Missing data remains missing without zero-fill or symbol substitution. The separ
 - The targeted status suite passed with 1 file and 15 tests.
 - Assertions cover fresh, stale, future, delayed, late, gapped, disconnected, reconnecting, closed-market, unknown-calendar, no-data, partial AAPL/SPY, degraded/unavailable dependencies, deterministic output, and mismatched repository slots.
 - Tests prove rendered output excludes recognizable secrets, raw payload fields, event IDs, unused OHLC values, and volume.
-- Sanitized service replay: **Not Run** because Docker services were unavailable. The credential-gated provider session connected, authenticated, and subscribed on 2026-07-12, but no Sunday minute bar arrived before the inactivity deadline, so provider-backed price/status output is not represented as passing.
+- Sanitized service replay: **Pass** — the initial and post-restart verifier passes rendered byte-identical status for persisted AAPL/SPY bars with healthy Redis/PostgreSQL state. The credential-gated provider session connected, authenticated, and subscribed on 2026-07-12, but no Sunday minute bar arrived before the inactivity deadline, so provider-backed price/status output is not represented as passing.
 
 ## Handoff
 

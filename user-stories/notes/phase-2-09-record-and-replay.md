@@ -1,6 +1,6 @@
 # P2-09 Implementation Note
 
-- Status: Implemented; integrated service validation blocked
+- Status: Complete
 - Implemented: 2026-07-12
 
 ## What Was Implemented
@@ -16,6 +16,7 @@ The service-backed replay command derives a stable target session from the check
 - The replay target passed with 2 files and 23 tests.
 - Tests verify the committed checksum and exact canonical bytes, export from ordered ledger events, gap/correction/out-of-order fixture coverage, corrupt/truncated/unsupported/wrong-scope/incomplete/noncanonical rejection, byte-identical replay into two separate clean targets and existing state, injected clock/pacing, and safe sink/sleeper failures. The service verifier uses the same two-clean-target comparison before its restart pass.
 - All replay tests are credential-free and perform no provider or broker connection.
+- The Docker-backed verifier passed two clean-target replays plus an existing-state replay before restart, then replayed again after restarting Redis and TimescaleDB. Both passes produced the same six ordered event IDs, recording bytes checksum, and terminal-status checksum.
 
 ## Handoff
 

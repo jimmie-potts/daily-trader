@@ -294,19 +294,32 @@ function parseReadResponse(
   if (response === null) {
     return [];
   }
-  if (!Array.isArray(response) || response.length !== 1) {
+
+  let entries: unknown;
+  if (Array.isArray(response)) {
+    // Redis returns a nested stream array under RESP2.
+    if (response.length !== 1) {
+      throw new RedisDeliveryError('entry_malformed');
+    }
+    const stream: unknown = response[0];
+    if (!Array.isArray(stream) || stream.length !== 2 || stream[0] !== expectedStream) {
+      throw new RedisDeliveryError('entry_malformed');
+    }
+    entries = stream[1];
+  } else if (typeof response === 'object') {
+    // Redis returns a stream-name map under RESP3, which is node-redis 6's default.
+    const streamNames = Reflect.ownKeys(response);
+    if (streamNames.length !== 1 || streamNames[0] !== expectedStream) {
+      throw new RedisDeliveryError('entry_malformed');
+    }
+    entries = Object.getOwnPropertyDescriptor(response, expectedStream)?.value;
+  } else {
     throw new RedisDeliveryError('entry_malformed');
   }
-  const stream: unknown = response[0];
-  if (
-    !Array.isArray(stream) ||
-    stream.length !== 2 ||
-    stream[0] !== expectedStream ||
-    !Array.isArray(stream[1])
-  ) {
+
+  if (!Array.isArray(entries)) {
     throw new RedisDeliveryError('entry_malformed');
   }
-  const entries: unknown[] = stream[1] as unknown[];
   return Object.freeze(entries.map((entry) => parseRedisMarketDataEntry(entry)));
 }
 

@@ -1,6 +1,6 @@
 # P2-07 Implementation Note
 
-- Status: Implemented; integrated service validation blocked
+- Status: Complete
 - Implemented: 2026-07-12
 
 ## What Was Implemented
@@ -13,9 +13,10 @@ The credential-free phase verifier supplies a unique run-scoped stream and consu
 
 ## Validation Evidence
 
-- Redis delivery passed with 1 file/10 tests; the combined delivery/persistence/status target passed with 4 files/44 tests.
+- Redis delivery passed with 1 file/12 tests after adding RESP2/RESP3 reply-shape coverage.
 - Tests cover publish encoding, exact field rejection, unsupported versions, duplicate/redelivery shape, consumer-group creation, new reads, pending reclaim, handler failure before acknowledgement, successful acknowledgement, bounded batches, and safe shutdown errors.
 - Safe inspection commands and the distinction between bounded Redis transport and durable recording are documented in `infrastructure/README.md`.
+- The Docker-backed Phase 2 verifier passed both its initial and post-restart runs against Redis 8.2.7. Investigation of the first failed live run found that `redis` 6.1 defaults to RESP3, whose `XREADGROUP` reply is keyed by stream name, while the original decoder accepted only the RESP2 nested-array form. The decoder now accepts both documented protocol forms while still requiring exactly the configured stream and exact entry fields.
 
 ## Handoff
 

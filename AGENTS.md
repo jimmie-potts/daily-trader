@@ -10,29 +10,31 @@ The project starts with market monitoring and paper trading. Do not implement or
 
 ## Current project state
 
-Phases 1 and 2 form a TypeScript npm-workspace monorepo on Node.js 22 with npm 11.18.0. The repository contains Next.js and Fastify shells; shared domain, market-data, configuration, observability, and test packages; a long-running market-data worker boundary; pinned PostgreSQL/TimescaleDB and Redis services; versioned migrations; and CI quality gates. Accepted choices and their consequences are recorded in `docs/adr/`.
+Phases 1 through 4 form a TypeScript npm-workspace monorepo on Node.js 22 with npm 11.18.0. The repository contains a Next.js paper-portfolio dashboard, Fastify health/read API, shared domain/market-data/signal/portfolio/configuration/observability packages, dedicated market-data/signal/portfolio workers, pinned PostgreSQL/TimescaleDB and Redis services, versioned migrations, and CI quality gates. Accepted choices and their consequences are recorded in `docs/adr/`.
 
-Phase 2 implements the narrow market-data slice: provider-supplied one-minute bars for AAPL at `XNAS` and SPY at `ARCX`, Alpaca IEX real-time single-exchange/zero-delay scope, regular core sessions from the embedded 2026-2028 NYSE snapshot, exact normalization, bounded adapter recovery, Redis delivery, durable canonical persistence, portable replay, and terminal status. Market data is disabled by default and the credential-gated provider smoke is separate from CI. P2-11 integrated service/restart verification has passed; do not report the phase exit as verified until the credential-gated `npm run market-data:provider-smoke` also observes normalized bars for both approved symbols.
+Phase 2 implements the narrow market-data slice: provider-supplied one-minute bars for AAPL at `XNAS` and SPY at `ARCX`, Alpaca IEX real-time single-exchange/zero-delay scope, regular core sessions from the embedded 2026-2028 NYSE snapshot, exact normalization, bounded adapter recovery, Redis delivery, durable canonical persistence, portable replay, and terminal status. The integrated service/restart verifier and separately credential-gated AAPL/SPY provider smoke have passed; P2-01 through P2-11 are complete.
 
-Phase 3 implementation is present because the user explicitly reprioritized it ahead of the remaining P2-11 provider-bar demonstration. It adds `@daily-trader/signals`, a dedicated signals worker, bounded exact-decimal feature and rule behavior, one versioned `breakout_plus_volume` observation, append-only evidence and run transitions, a durable PostgreSQL canonical-revision journal with writer-capability cutover checks, deterministic signal replay, and terminal signal status. Signal mode defaults to disabled and the only enabled mode is monitoring-only.
+Phase 3 adds `@daily-trader/signals`, a dedicated signals worker, bounded exact-decimal feature and rule behavior, one versioned `breakout_plus_volume` observation, append-only evidence and run transitions, a durable PostgreSQL canonical-revision journal with writer-capability cutover checks, deterministic signal replay, and terminal signal status. Its technical matrix and Phase 2 provider dependency have passed; P3-01 through P3-09 are complete. Signal mode defaults to disabled and the only enabled mode is monitoring-only.
 
-That reprioritization does not waive story dependencies or validation. Do not report a Phase 3 story or phase exit as complete until the credential-gated Phase 2 provider smoke observes normalized AAPL and SPY bars, the Phase 3 Docker/PostgreSQL service and restart verification passes, all remaining acceptance criteria pass, and the corresponding implementation note exists.
+Phase 4 adds a separate GET-only Alpaca paper-broker adapter, `@daily-trader/portfolio`, append-only complete synchronization cycles, fenced worker ownership, exact broker-mark calculations, projection-integrity reconciliation, a local read-only API, and a paper-portfolio dashboard. Its credential-free CI, fixture, migration, persistence, API/dashboard, interrupted-cycle restart, reconciliation, and cleanup matrix has passed; P4-01 through P4-10 are complete. P4-11 and the full Phase 4 exit remain open only for the separate credential-gated portfolio provider smoke. Portfolio mode defaults to disabled; the only enabled mode is `paper_read_only` against one explicitly expected account. Do not treat broker observations as locally originated orders, describe the open provider-created activity query as transaction-time completeness, or claim that fill activity reconstructs an independent accounting ledger.
 
-No portfolio synchronization, alert, order intent, broker execution, AI research, additional symbol, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no later phase is authorized implicitly.
+No alert, portfolio-risk decision, order intent, approval, broker mutation, execution, AI research, additional asset support, currency conversion, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no later phase is authorized implicitly. The credential-gated portfolio provider smoke remains separate from normal CI and must never be inferred from fixtures.
 
 ## Repository structure and commands
 
-- `apps/api/`: Fastify health API and smoke check
-- `apps/web/`: Next.js foundation status page
+- `apps/api/`: Fastify health and read-only portfolio API
+- `apps/web/`: Next.js read-only paper-portfolio dashboard
 - `workers/market-data/`: provider, recovery, Redis, persistence, replay, metrics, and terminal-status adapters
 - `workers/signals/`: durable canonical-revision processing, signal persistence, replay targets, metrics, and terminal status
+- `workers/portfolio/`: GET-only paper synchronization, persistence, reconciliation, metrics, status, and provider smoke
 - `packages/domain/`: framework- and vendor-independent domain primitives
 - `packages/market-data/`: provider-neutral event, calendar, freshness, ordering, and adapter contracts
 - `packages/signals/`: provider- and persistence-independent exact features, signal rules, transitions, and replay contracts
+- `packages/portfolio/`: provider-independent observations, exact projections, snapshot deltas, and reconciliation
 - `packages/config/`: validated configuration and safe diagnostics
 - `packages/observability/`: logging, metrics, tracing, and redaction
 - `packages/test-utils/`: deterministic test helpers
-- `infrastructure/postgres/migrations/`: versioned application-owned market-data and signal schema
+- `infrastructure/postgres/migrations/`: versioned application-owned market-data, signal, and portfolio schema
 - `infrastructure/`: pinned local services and operating notes
 - `docs/adr/`: accepted architecture decisions
 - `user-stories/notes/`: story validation and handoff notes
@@ -56,9 +58,15 @@ Use the root commands rather than bypassing workspace checks:
 - `npm run signal:replay:inspect -- <target-id>`: inspect one explicitly named replay target; never mix replay into default live status
 - `npm run signal:status`: render the selected persisted live signal run and signal-worker health
 - `npm run dev:signals`, `npm run start:signals`: run the dedicated worker; disabled mode is the safe default
+- `npm run portfolio:fixture:verify`: exercise sanitized broker fixtures through the production adapter boundary
+- `npm run portfolio:fixture:persist`: persist one sanitized complete cycle into an explicitly configured local verification database
+- `npm run portfolio:status`: render the selected complete portfolio snapshot and separate health dimensions
+- `npm run portfolio:provider-smoke`: run the separately credential-gated four-resource GET-only paper smoke
+- `npm run dev:portfolio`, `npm run start:portfolio`: run the dedicated read-only worker; disabled mode is the safe default
 - `npm run verify:foundation`: run CI, local-service checks, and process smoke checks
 - `npm run verify:phase2`: run the credential-free Phase 2 fixture, service, replay, and status handoff
-- `npm run verify:phase3`: run technical credential-free Phase 3 CI, migration, isolated replay, restart, status, and cleanup validation; even a successful run reports the phase exit blocked until provider smoke passes
+- `npm run verify:phase3`: run credential-free Phase 3 CI, migration, isolated replay, restart, status, and cleanup validation
+- `npm run verify:phase4`: run credential-free Phase 4 fixture, migration, persistence, reconciliation, API, dashboard, restart, and cleanup validation
 
 `npm run services:reset` deletes local volumes and must only be run intentionally. When new tooling establishes or changes commands, update this file and `README.md` in the same change.
 
@@ -296,4 +304,4 @@ Unless the user reprioritizes the roadmap, build the first vertical slice in thi
 9. Add portfolio-aware alerts.
 10. Introduce order intents only after the preceding behavior is stable.
 
-Phase 2 completes the market-data foundation in steps 1-4 and the reusable market-data replay substrate in step 7. Phase 3 implements steps 5-7 for only `breakout_plus_volume.v1`; its credential-free Docker/PostgreSQL service, restart, and replay acceptance path has passed, but the phase remains incomplete until P2-11 observes both approved provider symbols. It does not authorize portfolio work or later behavior. Do not begin live execution, additional asset classes, sentiment analysis, or complex strategy work without an explicitly scoped later phase.
+Phase 2 completes the market-data foundation in steps 1-4 and the reusable market-data replay substrate in step 7. Phase 3 completes steps 5-7 for only `breakout_plus_volume.v1`; its credential-free Docker/PostgreSQL acceptance path and the separate P2-11 provider observation have passed. Phase 4 implements step 8 as read-only paper-account monitoring only. It does not authorize portfolio-aware alerts, risk decisions, order intents, execution, additional asset classes, sentiment analysis, or complex strategy work without an explicitly scoped later phase.

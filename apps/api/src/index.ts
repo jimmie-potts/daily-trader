@@ -2,6 +2,7 @@ import { ConfigurationError, loadConfig, loadOptionalEnvironmentFile } from '@da
 import { createLogger, getMeter, initializeObservability } from '@daily-trader/observability';
 
 import { buildApi } from './app.js';
+import { createPortfolioApiDatabase } from './portfolio-postgres.js';
 
 async function main(): Promise<void> {
   loadOptionalEnvironmentFile();
@@ -17,13 +18,28 @@ async function main(): Promise<void> {
     serviceName: 'daily-trader-api',
   });
   const meter = getMeter('daily-trader-api');
-  const application = buildApi({ config, logger, meter });
+  const portfolioDatabase = createPortfolioApiDatabase({
+    connectionString: config.services.database.url,
+    connectionTimeoutMs: config.services.database.connectionTimeoutMs,
+    statementTimeoutMs: config.portfolio.operational.statementTimeoutMs,
+  });
+  const application = buildApi({
+    config,
+    logger,
+    meter,
+    portfolioReader: portfolioDatabase.reader,
+  });
+  let stopping: Promise<void> | undefined;
 
   const stop = async (signal: NodeJS.Signals): Promise<void> => {
-    meter.recordHealth('stopping');
-    logger.info('api.stopping', { signal });
-    await application.close();
-    await telemetry.shutdown();
+    stopping ??= (async () => {
+      meter.recordHealth('stopping');
+      logger.info('api.stopping', { signal });
+      await application.close();
+      await portfolioDatabase.close();
+      await telemetry.shutdown();
+    })();
+    await stopping;
   };
 
   process.once('SIGINT', () => {

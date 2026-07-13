@@ -1,0 +1,24 @@
+{
+  "name": "@daily-trader/portfolio-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "pretest": "npm run build --workspace=@daily-trader/domain --workspace=@daily-trader/portfolio --prefix ../..",
+    "pretest:watch": "npm run build --workspace=@daily-trader/domain --workspace=@daily-trader/portfolio --prefix ../..",
+    "smoke": "npm run build && node dist/index.js --once",
+    "start": "node dist/index.js",
+    "test": "vitest run --root ../.. workers/portfolio",
+    "test:watch": "vitest --root ../.. workers/portfolio",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@daily-trader/config": "*",
+    "@daily-trader/domain": "*",
+    "@daily-trader/observability": "*",
+    "@daily-trader/portfolio": "*",
+    "pg": "8.22.0"
+  }
+}

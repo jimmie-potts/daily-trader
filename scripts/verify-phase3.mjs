@@ -467,8 +467,8 @@ try {
     `${JSON.stringify({
       event: 'phase3.technical_verification.complete',
       outputChecksum: cleanA.outputChecksum,
-      phase2ProviderSmoke: 'pending',
-      phaseExit: 'blocked_on_provider_smoke',
+      phase2ProviderSmoke: 'recorded_pass_2026-07-13',
+      phaseExit: 'passed',
       status: 'passed',
     })}\n`,
   );

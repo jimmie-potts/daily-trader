@@ -1,7 +1,7 @@
 # P2-05 Implementation Note
 
-- Status: Implemented; live authentication/subscription passed, provider bars pending
-- Implemented: 2026-07-12
+- Status: Complete
+- Completed: 2026-07-13
 
 ## What Was Implemented
 
@@ -15,8 +15,8 @@ Alpaca's acknowledgement reports the subscribed symbols but may omit empty chann
 
 - Controlled fake-socket tests cover authentication order, exact subscription scope, pre-acknowledgement rejection, authentication/entitlement/subscription errors, timeouts, ignored and malformed frames, queue overflow, cancellation, graceful close, forced termination after a close timeout, and secret/error-frame exclusion.
 - Adapter tests prove normalized events are emitted only after acknowledgement and shutdown closes cleanly.
-- Credential-gated provider smoke on 2026-07-12: **Partial; not passed**. The worker connected, authenticated, and received an exact AAPL/SPY bars acknowledgement on Alpaca IEX. Because the run occurred on Sunday, no AAPL/SPY minute bar arrived before the bounded 90-second inactivity deadline; it exited safely with `ALPACA_INACTIVITY_TIMEOUT`. No normalized provider bar was observed, so the story's external bar demonstration remains pending.
+- Credential-gated provider smoke on 2026-07-13: **Pass**. `node --env-file=dev.env workers/market-data/dist/provider-smoke.js` connected to the fixed Alpaca IEX endpoint, authenticated, received the exact AAPL/SPY bars-only acknowledgement, observed normalized one-minute bars for AAPL/XNAS and SPY/ARCX at 17:18Z, emitted only sanitized metadata, and shut down cleanly after both approved symbols were observed. No credential, provider event ID, or raw frame is recorded here.
 
 ## Handoff
 
-Run `npm run market-data:provider-smoke` only with an uncommitted `.env` containing `MARKET_DATA_MODE=paper` and the complete credential pair. Never add fallback feeds, symbols, endpoints, brokerage access, or raw-frame recording to make the smoke pass.
+Run the documented provider smoke only with an ignored environment file containing `MARKET_DATA_MODE=paper` and the complete credential pair. Never add fallback feeds, symbols, endpoints, brokerage access, or raw-frame recording to make the smoke pass.

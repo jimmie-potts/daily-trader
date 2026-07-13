@@ -1,0 +1,15 @@
+[
+  {
+    "activity_type": "FILL",
+    "cum_qty": "2.0000",
+    "id": "fixture-fill-aapl-partial",
+    "leaves_qty": "8.0000",
+    "price": "204.2500",
+    "qty": "2.0000",
+    "side": "buy",
+    "symbol": "AAPL",
+    "transaction_time": "2026-07-13T09:31:01.987654321-04:00",
+    "order_id": "fixture-order-aapl-partial",
+    "type": "partial_fill"
+  }
+]

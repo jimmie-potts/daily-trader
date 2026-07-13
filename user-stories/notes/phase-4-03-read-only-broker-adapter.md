@@ -11,7 +11,7 @@ The injected HTTP boundary sends credentials only to the approved HTTPS origin, 
 
 ## Validation Evidence
 
-- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** — 10 test files/49 tests; adapter and HTTP tests verified exactly four GET operations, allowed paths and origin, pagination, exclusive created-at bounds and overlap, retries, response limits, redirects, cancellation, account mismatch, safe errors, and bounded shutdown.
+- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** — 10 test files/52 tests; adapter, normalization, and HTTP tests verified exactly four GET operations, allowed paths and origin, pagination, advanced-order child legs with omitted nested fields, exclusive created-at bounds and overlap, retries, response limits, redirects, cancellation, account mismatch, safe errors, and bounded shutdown.
 - Fixture verification passed through the production adapter and normalization boundary without a network connection or broker credential.
 - Production export review found no broker-write operation or generic HTTP capability.
 

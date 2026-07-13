@@ -698,6 +698,40 @@ describe('portfolio runtime', () => {
     expect(JSON.stringify(logs)).not.toContain('transport details must remain private');
   });
 
+  it('propagates a parent abort that occurs before deadline listener registration', async () => {
+    const controller = new AbortController();
+    const shutdownReason = new Error('test shutdown');
+    const providerSignals: AbortSignal[] = [];
+    const provider: PortfolioSnapshotProvider = {
+      capture: ({ signal }) => {
+        if (signal === undefined) return Promise.reject(new Error('missing provider signal'));
+        providerSignals.push(signal);
+        return Promise.reject(
+          signal.reason instanceof Error ? signal.reason : new Error('missing abort reason'),
+        );
+      },
+    };
+    const repository = new RecordingRepository();
+    const observations: MetricObservation[] = [];
+    const runtimeDependencies = dependencies({ provider, repository, observations });
+    Object.defineProperty(runtimeDependencies, 'provider', {
+      configurable: true,
+      get: (): PortfolioSnapshotProvider => {
+        controller.abort(shutdownReason);
+        return provider;
+      },
+    });
+
+    await expect(
+      runPortfolioRuntime(runtimeDependencies, controller.signal),
+    ).resolves.toBeUndefined();
+
+    expect(providerSignals).toHaveLength(1);
+    expect(providerSignals[0]).toMatchObject({ aborted: true, reason: shutdownReason });
+    expect(repository.failed).toMatchObject([{ failureCode: 'shutdown_interrupted' }]);
+    expect(repository.completeInputs).toEqual([]);
+  });
+
   it('keeps disabled mode side-effect free until shutdown', async () => {
     const controller = new AbortController();
     const observations: MetricObservation[] = [];

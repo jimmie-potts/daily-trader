@@ -1,7 +1,12 @@
 import { FixedClock, createUtcTimestamp } from '@daily-trader/domain';
 import { describe, expect, it } from 'vitest';
 
-import { buildPortfolioApiSnapshot, type PortfolioApiRepositorySnapshot } from './portfolio.js';
+import {
+  buildPortfolioApiSnapshot,
+  PortfolioApiRepository,
+  type PortfolioApiRepositorySnapshot,
+  type PortfolioQueryPort,
+} from './portfolio.js';
 
 const CLOCK = new FixedClock(createUtcTimestamp('2026-07-13T17:20:30.000Z'));
 
@@ -37,6 +42,9 @@ function repositorySnapshot(
       reconciliation_state: 'converged',
       change_state: 'baseline',
       worker_lifecycle: 'running',
+      worker_heartbeat_at: '2026-07-13T17:20:20.000Z',
+      worker_lease_expires_at: '2026-07-13T17:21:20.000Z',
+      worker_lease_current: true,
       worker_failure_code: null,
       last_sync_started_at: '2026-07-13T17:19:58.000Z',
       last_sync_completed_at: '2026-07-13T17:20:00.000Z',
@@ -208,6 +216,68 @@ describe('portfolio API presentation', () => {
       buildPortfolioApiSnapshot({ repository: failed, clock: CLOCK, staleAfterMs: 90_000 }).health
         .state,
     ).toBe('degraded');
+  });
+
+  it('degrades a retained snapshot when the database classifies its running lease as invalid', () => {
+    for (const leaseEvidence of [
+      {
+        worker_heartbeat_at: '2026-07-13T17:20:20.000Z',
+        worker_lease_expires_at: null,
+      },
+      {
+        worker_heartbeat_at: '2026-07-13T17:20:20.000Z',
+        worker_lease_expires_at: '2026-07-13T17:20:30.000Z',
+      },
+      {
+        worker_heartbeat_at: '2026-07-13T17:20:31.000Z',
+        worker_lease_expires_at: '2026-07-13T17:21:31.000Z',
+      },
+    ]) {
+      const result = buildPortfolioApiSnapshot({
+        repository: repositorySnapshot({
+          ...leaseEvidence,
+          worker_lease_current: false,
+        }),
+        clock: CLOCK,
+        staleAfterMs: 90_000,
+      });
+
+      expect(result.health).toMatchObject({
+        state: 'degraded',
+        workerLifecycle: 'running',
+      });
+    }
+  });
+
+  it('uses one database-clock observation to classify lease expiry and future heartbeats', async () => {
+    const source = repositorySnapshot({ worker_lease_current: false });
+    let currentQuery = '';
+    const database: PortfolioQueryPort = {
+      query: <Row extends Readonly<Record<string, unknown>>>(text: string) => {
+        if (text.includes('worker.lifecycle AS worker_lifecycle')) {
+          currentQuery = text;
+          return Promise.resolve({ rows: [source.current] as unknown as readonly Row[] });
+        }
+        if (text.includes('portfolio_position_observations AS position')) {
+          return Promise.resolve({ rows: source.positions as unknown as readonly Row[] });
+        }
+        if (text.includes('GROUP BY status')) {
+          return Promise.resolve({ rows: source.orderStatuses as unknown as readonly Row[] });
+        }
+        if (text.includes('MAX(fill.provider_transaction_at)')) {
+          return Promise.resolve({ rows: [source.fills] as unknown as readonly Row[] });
+        }
+        throw new Error('unexpected query');
+      },
+    };
+
+    const repository = await new PortfolioApiRepository(database).read();
+
+    expect(currentQuery).toContain('WITH database_clock AS MATERIALIZED');
+    expect(currentQuery).toContain('SELECT clock_timestamp() AS observed_at');
+    expect(currentQuery).toContain('worker.heartbeat_at <= database_clock.observed_at');
+    expect(currentQuery).toContain('worker.lease_expires_at > database_clock.observed_at');
+    expect(repository.current.worker_lease_current).toBe(false);
   });
 
   it('degrades a selected snapshot when immutable projection membership is incomplete', () => {

@@ -314,7 +314,11 @@ function flattenOrders(capture: AlpacaRawCapture): readonly RawOrder[] {
       }
       for (const leg of legs) {
         const child = record(leg);
-        if (child.legs !== null && !(Array.isArray(child.legs) && child.legs.length === 0)) {
+        if (
+          child.legs !== null &&
+          child.legs !== undefined &&
+          !(Array.isArray(child.legs) && child.legs.length === 0)
+        ) {
           throw malformed('ALPACA_ORDER_LEGS_NESTED');
         }
         orders.push(Object.freeze({ metadata: page.metadata, payload: child }));

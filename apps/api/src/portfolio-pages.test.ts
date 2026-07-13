@@ -55,9 +55,9 @@ function pageDatabase(input: {
 describe('portfolio API pagination contract', () => {
   it('accepts only canonical bounded limit and offset parameters', () => {
     expect(parsePortfolioApiPageRequest({})).toEqual({ limit: 25, offset: 0 });
-    expect(parsePortfolioApiPageRequest({ limit: '100', offset: '10000' })).toEqual({
+    expect(parsePortfolioApiPageRequest({ limit: '100', offset: '50000' })).toEqual({
       limit: 100,
-      offset: 10_000,
+      offset: 50_000,
     });
     for (const input of [
       null,
@@ -67,7 +67,7 @@ describe('portfolio API pagination contract', () => {
       { limit: '01' },
       { limit: ['1', '2'] },
       { offset: '-1' },
-      { offset: '10001' },
+      { offset: '50001' },
       { cursor: 'internal' },
     ]) {
       expect(parsePortfolioApiPageRequest(input)).toBeNull();
@@ -141,7 +141,7 @@ describe('portfolio API pagination contract', () => {
     const database = pageDatabase({
       countTable: 'portfolio_order_observations',
       pageTable: 'portfolio_order_observations AS observed_order',
-      total: '1',
+      total: '50000',
       rows: [
         {
           provider_order_id: 'provider-order-secret',
@@ -182,7 +182,10 @@ describe('portfolio API pagination contract', () => {
       ],
     });
 
-    const page = await new PortfolioApiRepository(database).readOrders({ limit: 25, offset: 0 });
+    const page = await new PortfolioApiRepository(database).readOrders({
+      limit: 1,
+      offset: 49_999,
+    });
 
     expect(page.items[0]).toMatchObject({
       symbol: 'SPY',
@@ -198,13 +201,22 @@ describe('portfolio API pagination contract', () => {
     expect(serialized).not.toContain('client-order-secret');
     expect(serialized).not.toContain('provider-asset-secret');
     expect(serialized).not.toMatch(/"(?:submit|replace|cancel|approve|orderIntent)":/u);
+    expect(page.pagination).toEqual({
+      limit: 1,
+      offset: 49_999,
+      returned: 1,
+      total: 50_000,
+      nextOffset: null,
+    });
+    const pageQuery = database.calls.find(({ text }) => text.includes('LIMIT $2 OFFSET $3'));
+    expect(pageQuery?.values).toEqual(['portfolio-sync-internal', 1, 49_999]);
   });
 
   it('returns safe fill facts in deterministic newest-first order without fill identifiers', async () => {
     const database = pageDatabase({
       countTable: 'portfolio_sync_fill_memberships',
       pageTable: 'portfolio_sync_fill_memberships AS membership',
-      total: '1',
+      total: '50000',
       rows: [
         {
           fill_observation_id: 'database-fill-secret',
@@ -224,7 +236,10 @@ describe('portfolio API pagination contract', () => {
       ],
     });
 
-    const page = await new PortfolioApiRepository(database).readFills({ limit: 25, offset: 0 });
+    const page = await new PortfolioApiRepository(database).readFills({
+      limit: 1,
+      offset: 49_999,
+    });
 
     expect(page.items).toEqual([
       {
@@ -245,6 +260,14 @@ describe('portfolio API pagination contract', () => {
     expect(serialized).not.toContain('provider-fill-secret');
     expect(serialized).not.toContain('provider-order-secret');
     const pageQuery = database.calls.find(({ text }) => text.includes('LIMIT $2 OFFSET $3'));
+    expect(page.pagination).toEqual({
+      limit: 1,
+      offset: 49_999,
+      returned: 1,
+      total: 50_000,
+      nextOffset: null,
+    });
+    expect(pageQuery?.values).toEqual(['portfolio-sync-internal', 1, 49_999]);
     expect(pageQuery?.text).toContain(
       'ORDER BY fill.provider_transaction_at DESC, membership.ordinal ASC',
     );

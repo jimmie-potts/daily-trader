@@ -281,6 +281,32 @@ describe('normalizeAlpacaCapture', () => {
     ).toMatchObject({ filledAveragePrice: '0', filledQuantity: '0', state: 'open' });
   });
 
+  it('accepts omitted child legs while rejecting non-empty nested child legs', () => {
+    const ordersWithChild = clonedArray('orders');
+    const child = structuredClone(ordersWithChild[0]!);
+    child.id = 'fixture-order-aapl-child';
+    child.client_order_id = 'fixture-client-aapl-child';
+    delete child.legs;
+    ordersWithChild[0]!.legs = [child];
+
+    const normalizedChildren = normalizeAlpacaCapture(capture({ orders: ordersWithChild })).orders;
+    const aaplOrders = normalizedChildren.filter(({ symbol }) => symbol === 'AAPL');
+    expect(aaplOrders).toHaveLength(2);
+    expect(new Set(aaplOrders.map(({ orderFingerprint }) => orderFingerprint))).toHaveProperty(
+      'size',
+      2,
+    );
+
+    const ordersWithNestedChild = structuredClone(ordersWithChild);
+    const nestedChild = (ordersWithNestedChild[0]!.legs as Record<string, unknown>[])[0]!;
+    nestedChild.legs = [structuredClone(child)];
+    expect(() => normalizeAlpacaCapture(capture({ orders: ordersWithNestedChild }))).toThrowError(
+      expect.objectContaining<Partial<AlpacaPaperApiError>>({
+        code: 'ALPACA_ORDER_LEGS_NESTED',
+      }),
+    );
+  });
+
   it('rejects duplicate sources and inconsistent order or fill quantities', () => {
     const duplicatePositions = clonedArray('positions');
     duplicatePositions.push(structuredClone(duplicatePositions[0]!));

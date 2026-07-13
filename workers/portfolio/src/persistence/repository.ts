@@ -262,7 +262,12 @@ async function transaction<T>(
   }
 }
 
-async function requireLease(client: SqlClient, lease: PortfolioLease): Promise<void> {
+async function requireLease(
+  client: SqlClient,
+  lease: PortfolioLease,
+  lockMode: 'check' | 'lock' = 'lock',
+): Promise<void> {
+  const lockClause = lockMode === 'lock' ? ' FOR UPDATE' : '';
   const result = await client.query(
     `SELECT 1
        FROM portfolio_worker_status
@@ -270,8 +275,7 @@ async function requireLease(client: SqlClient, lease: PortfolioLease): Promise<v
         AND owner_id = $1
         AND fence_token = $2::bigint
         AND account_fingerprint = $3
-        AND lease_expires_at > clock_timestamp()
-      FOR UPDATE`,
+        AND lease_expires_at > clock_timestamp()${lockClause}`,
     [lease.ownerId, lease.fenceToken, lease.accountFingerprint],
   );
   if (result.rows.length !== 1) {
@@ -681,7 +685,9 @@ export class PortfolioRepository {
     }
     const completedAt = snapshot.knowledgeInterval.captureCompletedAt;
     await transaction(this.#pool, async (client) => {
-      await requireLease(client, handle.lease);
+      // Candidate writes remain transaction-local and non-current until promotion. This
+      // nonlocking lease check leaves heartbeat renewal unblocked during large snapshots.
+      await requireLease(client, handle.lease, 'check');
       const requestEvidence = await client.query<RequestReceiptRow>(
         `SELECT resource, ordinal, provider_request_fingerprint, response_status
            FROM portfolio_sync_requests
@@ -749,6 +755,9 @@ export class PortfolioRepository {
         projectionBasisReconciliation: persistedBasisReconciliation,
         reconciliation: persistedReconciliation,
       });
+
+      // Lock and revalidate only after candidate persistence. This keeps lease renewal unblocked
+      // during large writes while preserving one atomic completion-and-promotion transaction.
       await requireLease(client, handle.lease);
 
       const unsupportedCount = snapshot.positions.filter(

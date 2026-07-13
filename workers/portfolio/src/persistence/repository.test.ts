@@ -97,6 +97,7 @@ class DeterministicSqlPool implements SqlPool {
   public readonly calls: QueryRecord[] = [];
   public completionAllowed = true;
   public leaseAcquirable = true;
+  public leaseCheckResults: boolean[] = [];
   public leaseValid = true;
   public renewalAllowed = true;
   public receiptInsertAllowed = true;
@@ -144,7 +145,8 @@ class DeterministicSqlPool implements SqlPool {
       return queryResult<Row>([], null);
     }
     if (sql.startsWith('SELECT 1 FROM portfolio_worker_status')) {
-      return this.leaseValid ? queryResult<Row>([{ held: 1 }], 1) : queryResult<Row>([], 0);
+      const leaseValid = this.leaseCheckResults.shift() ?? this.leaseValid;
+      return leaseValid ? queryResult<Row>([{ held: 1 }], 1) : queryResult<Row>([], 0);
     }
     if (sql.includes('RETURNING fence_token::text')) {
       return this.leaseAcquirable
@@ -630,6 +632,43 @@ describe('PortfolioRepository complete-cycle promotion', () => {
     );
     expect(projectionInsert?.parameters[2]).toBe('incomplete');
     expect(projectionInsert?.parameters[9]).toBeNull();
+  });
+
+  it('writes candidates without a worker-row lock and rolls back lease loss before promotion', async () => {
+    const snapshot = await normalizedSnapshot();
+    const pool = new DeterministicSqlPool();
+    const repository = new PortfolioRepository(pool, config());
+    const handle = await begin(repository, snapshot, 'portfolio-sync-lease-boundary');
+    await recordSnapshotReceipts(repository, handle, snapshot);
+    pool.calls.length = 0;
+    pool.leaseCheckResults.push(true, false);
+
+    await expect(repository.completeSync(completionInput(handle, snapshot))).rejects.toEqual(
+      new PortfolioWorkerError('claim_lost', 'Portfolio worker lease was lost', false),
+    );
+
+    const leaseChecks = pool.calls
+      .map(({ text }, index) => ({ index, text }))
+      .filter(({ text }) => text.startsWith('SELECT 1 FROM portfolio_worker_status'));
+    const reconciliationInsertIndex = pool.calls.findIndex(({ text }) =>
+      text.startsWith('INSERT INTO portfolio_reconciliations'),
+    );
+    expect(leaseChecks).toHaveLength(2);
+    expect(leaseChecks[0]?.text).not.toContain('FOR UPDATE');
+    expect(reconciliationInsertIndex).toBeGreaterThan(leaseChecks[0]?.index ?? -1);
+    expect(leaseChecks[1]?.index).toBeGreaterThan(reconciliationInsertIndex);
+    expect(leaseChecks[1]?.text).toContain('FOR UPDATE');
+    expect(pool.calls.filter(({ text }) => text === 'BEGIN')).toHaveLength(1);
+    expect(pool.calls.some(({ text }) => text === 'ROLLBACK')).toBe(true);
+    expect(pool.calls.some(({ text }) => text === 'COMMIT')).toBe(false);
+    expect(
+      pool.calls.some(({ text }) =>
+        text.startsWith("UPDATE portfolio_sync_runs SET state = 'completed'"),
+      ),
+    ).toBe(false);
+    expect(
+      pool.calls.some(({ text }) => text.startsWith('INSERT INTO portfolio_current_snapshot')),
+    ).toBe(false);
   });
 
   it('rejects a final attempt with partial receipt membership before writing candidate rows', async () => {

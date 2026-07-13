@@ -77,6 +77,9 @@ describe('GET /v1/portfolio', () => {
       reconciliation_state: null,
       change_state: null,
       worker_lifecycle: 'disabled',
+      worker_heartbeat_at: '2026-07-13T17:20:00.000Z',
+      worker_lease_expires_at: null,
+      worker_lease_current: false,
       worker_failure_code: null,
       last_sync_started_at: null,
       last_sync_completed_at: null,
@@ -273,13 +276,13 @@ describe('GET /v1/portfolio', () => {
       (
         await application.inject({
           method: 'GET',
-          url: '/v1/portfolio/positions?limit=100&offset=10000',
+          url: '/v1/portfolio/positions?limit=100&offset=50000',
         })
       ).statusCode,
     ).toBe(200);
     expect(requests).toEqual([
       { limit: 25, offset: 0 },
-      { limit: 100, offset: 10_000 },
+      { limit: 100, offset: 50_000 },
     ]);
   });
 
@@ -289,7 +292,7 @@ describe('GET /v1/portfolio', () => {
     'limit=1.5',
     'limit=01',
     'offset=-1',
-    'offset=10001',
+    'offset=50001',
     'offset=1e2',
     'cursor=opaque',
     'limit=1&limit=2',

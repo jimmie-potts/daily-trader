@@ -39,6 +39,9 @@ interface CurrentRow extends Readonly<Record<string, unknown>> {
   readonly reconciliation_state: 'converged' | 'drift' | 'unavailable' | null;
   readonly change_state: 'baseline' | 'changed' | 'unchanged' | null;
   readonly worker_lifecycle: string;
+  readonly worker_heartbeat_at: string;
+  readonly worker_lease_expires_at: string | null;
+  readonly worker_lease_current: boolean;
   readonly worker_failure_code: string | null;
   readonly last_sync_started_at: string | null;
   readonly last_sync_completed_at: string | null;
@@ -223,7 +226,10 @@ export interface PortfolioApiFillObservation {
 
 export const PORTFOLIO_PAGE_DEFAULT_LIMIT = 25;
 export const PORTFOLIO_PAGE_MAX_LIMIT = 100;
-export const PORTFOLIO_PAGE_MAX_OFFSET = 10_000;
+// Orders and fills are each bounded to 50,000 persisted observations by configuration.
+// Keeping that terminal offset valid lets callers reach every allowed observation while
+// still rejecting unbounded database scans.
+export const PORTFOLIO_PAGE_MAX_OFFSET = 50_000;
 
 export interface PortfolioApiPageRequest {
   readonly limit: number;
@@ -323,6 +329,9 @@ export interface PortfolioApiRepositorySnapshot {
 }
 
 const CURRENT_SQL = `
+  WITH database_clock AS MATERIALIZED (
+    SELECT clock_timestamp() AS observed_at
+  )
   SELECT
     current.sync_run_id,
     run.capture_completed_at::text,
@@ -351,6 +360,13 @@ const CURRENT_SQL = `
     reconciliation.integrity_state AS reconciliation_state,
     reconciliation.change_state,
     worker.lifecycle AS worker_lifecycle,
+    worker.heartbeat_at::text AS worker_heartbeat_at,
+    worker.lease_expires_at::text AS worker_lease_expires_at,
+    COALESCE(
+      worker.heartbeat_at <= database_clock.observed_at
+      AND worker.lease_expires_at > database_clock.observed_at,
+      false
+    ) AS worker_lease_current,
     worker.failure_code AS worker_failure_code,
     worker.last_sync_started_at::text,
     worker.last_sync_completed_at::text
@@ -361,6 +377,7 @@ const CURRENT_SQL = `
   LEFT JOIN portfolio_projections AS projection ON projection.sync_run_id = current.sync_run_id
   LEFT JOIN portfolio_reconciliations AS reconciliation
     ON reconciliation.sync_run_id = current.sync_run_id
+  CROSS JOIN database_clock
   WHERE worker.singleton
 `;
 
@@ -874,7 +891,7 @@ export function buildPortfolioApiSnapshot(input: {
   const reconciliationUnhealthy =
     snapshotAsOf !== null && current.reconciliation_state !== 'converged';
   const projectionUnhealthy = snapshotAsOf !== null && current.projection_state !== 'complete';
-  const workerUnhealthy = current.worker_lifecycle !== 'running';
+  const workerUnhealthy = current.worker_lifecycle !== 'running' || !current.worker_lease_current;
   const membershipUnhealthy =
     snapshotAsOf !== null &&
     (current.position_count === null ||

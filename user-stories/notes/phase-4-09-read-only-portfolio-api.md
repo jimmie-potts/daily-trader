@@ -11,7 +11,7 @@ Responses label paper, read-only, and execution-disabled mode and preserve the k
 
 ## Validation Evidence
 
-- `npm test --workspace=@daily-trader/api`: **Pass** — 3 test files/36 tests covered complete, empty, stale, failed-sync, missing reconciliation, suppressed and unsupported state, subsequent fill queries, all four GET endpoints, pagination bounds, stable ordering, database failure, version rejection, and non-GET rejection.
+- `npm test --workspace=@daily-trader/api`: **Pass** — 3 test files/38 tests covered complete, empty, stale, failed-sync, expired database-clock leases, missing reconciliation, suppressed and unsupported state, subsequent fill queries, all four GET endpoints, configured-capacity pagination bounds, stable ordering, database failure, version rejection, and non-GET rejection.
 - API type checking, linting, and formatting passed.
 - Response scans and assertions found no credential, account, request, provider object, internal row identifier, broker-write link, order intent, or unsafe numeric value.
 

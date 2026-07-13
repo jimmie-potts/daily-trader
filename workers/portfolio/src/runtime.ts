@@ -245,7 +245,8 @@ async function captureWithinDeadline(input: {
 }): Promise<PortfolioSyncSnapshot> {
   const controller = new AbortController();
   const abortFromParent = (): void => controller.abort(input.parentSignal.reason);
-  input.parentSignal.addEventListener('abort', abortFromParent, { once: true });
+  if (input.parentSignal.aborted) abortFromParent();
+  else input.parentSignal.addEventListener('abort', abortFromParent, { once: true });
   const timer = setTimeout(
     () => controller.abort(new Error('portfolio request deadline')),
     input.timeoutMs,

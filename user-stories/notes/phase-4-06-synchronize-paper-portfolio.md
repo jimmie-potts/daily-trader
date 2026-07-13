@@ -11,7 +11,7 @@ Retries are bounded by typed failure classification, exponential backoff and jit
 
 ## Validation Evidence
 
-- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** — 10 test files/49 tests covered disabled startup, populated cycles, created-at query versus fill-transaction boundaries, transient recovery, fatal failure, request receipts across attempts, last-complete age, staleness, lease loss, database failure, interrupted cycles, retry bounds, and graceful/forced shutdown.
+- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** — 10 test files/52 tests covered disabled startup, populated cycles, created-at query versus fill-transaction boundaries, transient recovery, fatal failure, request receipts across attempts, last-complete age, staleness, lease renewal during large candidate writes, lease loss before atomic promotion, database failure, interrupted cycles, already-aborted capture startup, retry bounds, and graceful/forced shutdown.
 - Worker type checking and linting passed, and fixture commands exercised the production orchestration boundary without credentials.
 - Restart-verifier logic preserves an incomplete cycle's request evidence, waits for database-clock lease expiry, reacquires a higher fence, terminalizes the orphan as `worker_restarted`, rejects unsafe promotion, and retains the prior current pointer.
 

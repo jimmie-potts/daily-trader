@@ -43,6 +43,7 @@ Use the root commands rather than bypassing workspace checks:
 - `npm run format:check`, `npm run lint`, `npm run typecheck`: static quality gates
 - `npm run format`, `npm run lint:fix`: apply formatter and safe automatic lint fixes
 - `npm test`, `npm run test:coverage`: deterministic unit tests
+- `npm run build:config-runtime`: build configuration and its transitive workspace runtime dependencies
 - `npm run build`: build packages and all process shells
 - `npm run ci`: run the complete local CI equivalent
 - `npm run services:up`, `npm run services:check`, `npm run services:stop`: operate local dependencies

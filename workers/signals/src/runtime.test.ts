@@ -7,7 +7,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SignalsWorkerConfig } from './config.js';
 import { SignalsWorkerError } from './errors.js';
 import type { LiveRunClaim, SignalsRepository } from './persistence/repository.js';
-import { classifyRevisionCommitOutcome, drainClaim, runSignalsRuntime } from './runtime.js';
+import {
+  classifyRevisionCommitOutcome,
+  drainClaim,
+  runDisabledSignalsRuntime,
+  runSignalsRuntime,
+} from './runtime.js';
 
 interface MetricObservation {
   readonly kind: 'counter' | 'gauge' | 'health' | 'histogram';
@@ -208,5 +213,121 @@ describe('signal runtime metrics', () => {
       ]),
     );
     expect(fail).toHaveBeenCalledWith(null, 'capacity_exceeded', CLOCK);
+  });
+
+  it('preserves a processing failure when abort races with repository work', async () => {
+    const observations: MetricObservation[] = [];
+    const controller = new AbortController();
+    const failure = new SignalsWorkerError('journal_gap');
+    const fail = vi.fn(() => Promise.resolve());
+    const heartbeat = vi.fn(() => Promise.resolve());
+    const repository = {
+      enableOrResume: vi.fn(() => Promise.resolve(CLOSING_CLAIM)),
+      loadRunSettings: vi.fn(() =>
+        Promise.resolve({ configuration: CONFIGURATION, operational: OPERATIONAL }),
+      ),
+      boundaries: vi.fn(() =>
+        Promise.resolve(
+          new Map([
+            ['AAPL', createUtcTimestamp('2026-07-13T13:30:00.000Z')],
+            ['SPY', createUtcTimestamp('2026-07-13T13:30:00.000Z')],
+          ]),
+        ),
+      ),
+      refreshBacklog: vi.fn(() => {
+        controller.abort();
+        return Promise.reject(failure);
+      }),
+      fail,
+      heartbeat,
+    } as unknown as SignalsRepository;
+    const config: SignalsWorkerConfig = Object.freeze({
+      environment: 'test',
+      runtime: Object.freeze({ logLevel: 'info', telemetryExporter: 'none' }),
+      worker: Object.freeze({ heartbeatIntervalMs: 1_000 }),
+      signal: Object.freeze({
+        mode: 'monitor',
+        configuration: CONFIGURATION,
+        operational: OPERATIONAL,
+      }),
+      database: Object.freeze({
+        url: 'postgresql://daily_trader:daily_trader@localhost:5432/daily_trader',
+        connectionTimeoutMs: 5_000,
+      }),
+    });
+
+    await expect(
+      runSignalsRuntime(
+        {
+          config,
+          repository,
+          clock: CLOCK,
+          logger: LOGGER,
+          meter: recordingMeter(observations),
+        },
+        controller.signal,
+      ),
+    ).rejects.toBe(failure);
+
+    expect(fail).toHaveBeenCalledWith(CLOSING_CLAIM, 'journal_gap', CLOCK);
+    expect(heartbeat).not.toHaveBeenCalled();
+    expect(
+      observations.filter(({ name }) => name === 'daily_trader.signal.worker_lifecycle'),
+    ).toMatchObject([
+      { attributes: { state: 'starting' } },
+      { attributes: { state: 'running' } },
+      { attributes: { state: 'failed' } },
+    ]);
+  });
+
+  it('persists a disabled-mode drain failure before exiting', async () => {
+    const observations: MetricObservation[] = [];
+    const failure = new SignalsWorkerError('stored_data_invalid');
+    const fail = vi.fn(() => Promise.resolve());
+    const repository = {
+      disable: vi.fn(() => Promise.resolve(CLOSING_CLAIM)),
+      loadRunSettings: vi.fn(() => Promise.reject(failure)),
+      fail,
+    } as unknown as SignalsRepository;
+    const config: SignalsWorkerConfig = Object.freeze({
+      environment: 'test',
+      runtime: Object.freeze({ logLevel: 'info', telemetryExporter: 'none' }),
+      worker: Object.freeze({ heartbeatIntervalMs: 1_000 }),
+      signal: Object.freeze({
+        mode: 'disabled',
+        configuration: CONFIGURATION,
+        operational: OPERATIONAL,
+      }),
+      database: Object.freeze({
+        url: 'postgresql://daily_trader:daily_trader@localhost:5432/daily_trader',
+        connectionTimeoutMs: 5_000,
+      }),
+    });
+
+    await expect(
+      runDisabledSignalsRuntime(
+        {
+          config,
+          repository,
+          clock: CLOCK,
+          logger: LOGGER,
+          meter: recordingMeter(observations),
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toBe(failure);
+
+    expect(fail).toHaveBeenCalledWith(CLOSING_CLAIM, 'stored_data_invalid', CLOCK);
+    expect(
+      observations.filter(({ name }) => name === 'daily_trader.signal.worker_lifecycle'),
+    ).toMatchObject([{ attributes: { state: 'starting' } }, { attributes: { state: 'failed' } }]);
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'daily_trader.signal.failures',
+          attributes: { reason: 'stored_data_invalid' },
+        }),
+      ]),
+    );
   });
 });

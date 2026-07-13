@@ -944,8 +944,9 @@ export class SignalsRepository {
       );
       const count = bigintText(result.rows[0]?.backlog_count, 'backlog_count');
       const updated = await client.query(
-        `UPDATE signal_worker_status SET active_run_id = $1, heartbeat_at = $2,
-           backlog_count = $3, updated_at = $2
+        `UPDATE signal_worker_status
+         SET lifecycle = CASE WHEN lifecycle = 'starting' THEN 'running' ELSE lifecycle END,
+           active_run_id = $1, heartbeat_at = $2, backlog_count = $3, updated_at = $2
          WHERE singleton AND claim_owner_id = $4 AND claim_fence = $5`,
         [claimed.runId, clock.now(), count, claimed.ownerId, claimed.statusFenceToken],
       );

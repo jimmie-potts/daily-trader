@@ -168,6 +168,12 @@ class RecordingTransactionPool implements SqlPool {
     values?: readonly unknown[],
   ): Promise<SqlQueryResult<Row>> {
     this.queries.push({ text, ...(values === undefined ? {} : { values }) });
+    if (text.includes('SELECT count(*)::bigint AS backlog_count')) {
+      return Promise.resolve({
+        rows: [{ backlog_count: '0' }] as unknown as readonly Row[],
+        rowCount: 1,
+      });
+    }
     return Promise.resolve({ rows: [], rowCount: 1 });
   }
 }
@@ -745,6 +751,26 @@ describe('SignalsRepository worker-status fencing', () => {
     leaseDurationMs: 30_000,
     renewIntervalMs: 10_000,
   };
+
+  it('marks an enabled idle worker running during its fenced backlog heartbeat', async () => {
+    const pool = new RecordingTransactionPool();
+    const repository = new SignalsRepository(pool, WORKER_OWNER_ID);
+
+    await expect(repository.refreshBacklog(claim, 10_000, cutoverClock)).resolves.toBe('0');
+
+    const heartbeat = pool.queries.find(({ text }) => text.includes('backlog_count = $3'));
+    expect(heartbeat?.text).toContain(
+      "lifecycle = CASE WHEN lifecycle = 'starting' THEN 'running' ELSE lifecycle END",
+    );
+    expect(heartbeat?.text).toContain('claim_owner_id = $4 AND claim_fence = $5');
+    expect(heartbeat?.values).toEqual([
+      claim.runId,
+      cutoverClock.now(),
+      '0',
+      claim.ownerId,
+      claim.statusFenceToken,
+    ]);
+  });
 
   it('conditions terminal heartbeat and failure writes on owner and status fence', async () => {
     const pool = new RecordingTransactionPool();

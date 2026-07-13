@@ -53,18 +53,19 @@ user-stories/              Phase stories and implementation notes
 
 ### Quality and build commands
 
-| Command                 | Purpose                                            |
-| ----------------------- | -------------------------------------------------- |
-| `npm run format`        | Format maintained files.                           |
-| `npm run format:check`  | Verify formatting without writing files.           |
-| `npm run lint`          | Run type-aware lint rules with zero warnings.      |
-| `npm run lint:fix`      | Apply safe lint fixes, then enforce zero warnings. |
-| `npm run typecheck`     | Strictly type-check every workspace.               |
-| `npm test`              | Run deterministic unit tests once.                 |
-| `npm run test:watch`    | Run unit tests in watch mode.                      |
-| `npm run test:coverage` | Run tests and write diagnostic V8 coverage.        |
-| `npm run build`         | Build shared packages, API, web app, and workers.  |
-| `npm run ci`            | Reproduce the complete CI quality gate locally.    |
+| Command                        | Purpose                                                                |
+| ------------------------------ | ---------------------------------------------------------------------- |
+| `npm run format`               | Format maintained files.                                               |
+| `npm run format:check`         | Verify formatting without writing files.                               |
+| `npm run lint`                 | Run type-aware lint rules with zero warnings.                          |
+| `npm run lint:fix`             | Apply safe lint fixes, then enforce zero warnings.                     |
+| `npm run typecheck`            | Strictly type-check every workspace.                                   |
+| `npm test`                     | Run deterministic unit tests once.                                     |
+| `npm run test:watch`           | Run unit tests in watch mode.                                          |
+| `npm run test:coverage`        | Run tests and write diagnostic V8 coverage.                            |
+| `npm run build:config-runtime` | Build configuration and its transitive workspace runtime dependencies. |
+| `npm run build`                | Build shared packages, API, web app, and workers.                      |
+| `npm run ci`                   | Reproduce the complete CI quality gate locally.                        |
 
 ### Market-data commands
 

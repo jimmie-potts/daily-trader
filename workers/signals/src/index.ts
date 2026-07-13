@@ -5,10 +5,9 @@ import { createLogger, getMeter, initializeObservability } from '@daily-trader/o
 
 import { projectSignalsWorkerConfig } from './config.js';
 import { SignalsWorkerError } from './errors.js';
-import { SignalMetrics } from './metrics.js';
 import { createPgSignalsPool } from './persistence/pg-pool.js';
 import { SignalsRepository } from './persistence/repository.js';
-import { drainClaim, runSignalsRuntime } from './runtime.js';
+import { runDisabledSignalsRuntime, runSignalsRuntime } from './runtime.js';
 import { createBoundedPoolShutdown } from './shutdown.js';
 import { SystemClock } from './system-clock.js';
 
@@ -64,7 +63,6 @@ async function main(): Promise<void> {
   });
   const repository = new SignalsRepository(pool, `signal-worker-${randomUUID()}`);
   if (config.signal.mode === 'disabled') {
-    const signalMetrics = new SignalMetrics(meter);
     const controller = new AbortController();
     const shutdown = createBoundedPoolShutdown({
       controller,
@@ -73,37 +71,17 @@ async function main(): Promise<void> {
     });
     process.once('SIGINT', shutdown.stop);
     process.once('SIGTERM', shutdown.stop);
-    meter.recordHealth('starting');
-    signalMetrics.recordLifecycle('starting');
     try {
-      const clock = new SystemClock();
-      let claim = await repository.disable(clock, config.signal.operational.claimLeaseMs);
-      while (claim !== null && !controller.signal.aborted) {
-        await drainClaim({ repository, clock, logger, meter }, claim, controller.signal);
-        claim = await repository.disable(clock, config.signal.operational.claimLeaseMs);
-      }
-      if (controller.signal.aborted) {
-        meter.recordHealth('stopping');
-        signalMetrics.recordLifecycle('stopping');
-      } else {
-        await repository.heartbeat(claim, 'disabled', clock);
-        meter.recordHealth('healthy');
-        signalMetrics.recordLifecycle('disabled');
-        logger.info('signals_worker.disabled');
-        await new Promise<void>((resolve) =>
-          controller.signal.addEventListener('abort', () => resolve(), { once: true }),
-        );
-        meter.recordHealth('stopping');
-        signalMetrics.recordLifecycle('stopping');
-      }
-      await repository.heartbeat(claim, 'stopped', clock);
-      signalMetrics.recordLifecycle('stopped');
-      logger.info('signals_worker.stopped');
-    } catch (error) {
-      meter.recordHealth('unhealthy');
-      signalMetrics.recordLifecycle('failed');
-      signalMetrics.recordFailure(error instanceof SignalsWorkerError ? error.code : 'unexpected');
-      throw error;
+      await runDisabledSignalsRuntime(
+        {
+          config,
+          repository,
+          clock: new SystemClock(),
+          logger,
+          meter,
+        },
+        controller.signal,
+      );
     } finally {
       process.removeListener('SIGINT', shutdown.stop);
       process.removeListener('SIGTERM', shutdown.stop);

@@ -6,8 +6,8 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "prebuild": "npm run build --workspace=@daily-trader/config --prefix ../.. && node ../../scripts/validate-config.mjs",
-    "predev": "npm run build --workspace=@daily-trader/config --prefix ../.. && node ../../scripts/validate-config.mjs",
+    "prebuild": "npm run build:config-runtime --prefix ../.. && node ../../scripts/validate-config.mjs",
+    "predev": "npm run build:config-runtime --prefix ../.. && node ../../scripts/validate-config.mjs",
     "prestart": "node ../../scripts/validate-config.mjs",
     "pretest": "npm run build:packages --prefix ../..",
     "pretest:watch": "npm run build:packages --prefix ../..",

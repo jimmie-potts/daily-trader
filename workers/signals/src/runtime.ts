@@ -98,6 +98,57 @@ export interface SignalsRuntimeDependencies {
   readonly meter: AppMeter;
 }
 
+export async function runDisabledSignalsRuntime(
+  dependencies: SignalsRuntimeDependencies,
+  signal: AbortSignal,
+): Promise<void> {
+  const metrics = new SignalMetrics(dependencies.meter);
+  dependencies.meter.recordHealth('starting');
+  metrics.recordLifecycle('starting');
+  let claim: LiveRunClaim | null = null;
+  try {
+    claim = await dependencies.repository.disable(
+      dependencies.clock,
+      dependencies.config.signal.operational.claimLeaseMs,
+    );
+    while (claim !== null && !signal.aborted) {
+      await drainClaim(dependencies, claim, signal);
+      claim = await dependencies.repository.disable(
+        dependencies.clock,
+        dependencies.config.signal.operational.claimLeaseMs,
+      );
+    }
+    if (signal.aborted) {
+      dependencies.meter.recordHealth('stopping');
+      metrics.recordLifecycle('stopping');
+    } else {
+      await dependencies.repository.heartbeat(claim, 'disabled', dependencies.clock);
+      dependencies.meter.recordHealth('healthy');
+      metrics.recordLifecycle('disabled');
+      dependencies.logger.info('signals_worker.disabled');
+      await new Promise<void>((resolve) =>
+        signal.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      dependencies.meter.recordHealth('stopping');
+      metrics.recordLifecycle('stopping');
+    }
+    await dependencies.repository.heartbeat(claim, 'stopped', dependencies.clock);
+    metrics.recordLifecycle('stopped');
+    dependencies.logger.info('signals_worker.stopped');
+  } catch (error) {
+    dependencies.meter.recordHealth('unhealthy');
+    const code = error instanceof SignalsWorkerError ? error.code : 'unexpected';
+    metrics.recordLifecycle('failed');
+    metrics.recordFailure(code);
+    try {
+      await dependencies.repository.fail(claim, code, dependencies.clock);
+    } catch {
+      // Preserve the original failure; an unavailable database cannot persist its own outage.
+    }
+    throw error;
+  }
+}
+
 export async function drainClaim(
   dependencies: Omit<SignalsRuntimeDependencies, 'config'>,
   initialClaim: LiveRunClaim,
@@ -187,6 +238,7 @@ export async function runSignalsRuntime(
   dependencies.meter.recordHealth('starting');
   metrics.recordLifecycle('starting');
   let claim: LiveRunClaim | null = null;
+  let failed = false;
   try {
     claim = await metrics.measureClaim(() =>
       dependencies.repository.enableOrResume(
@@ -215,6 +267,7 @@ export async function runSignalsRuntime(
       metrics.recordClaim(claim.state);
     }
   } catch (error) {
+    failed = true;
     dependencies.meter.recordHealth('unhealthy');
     const code = error instanceof SignalsWorkerError ? error.code : 'unexpected';
     metrics.recordLifecycle('failed');
@@ -226,7 +279,7 @@ export async function runSignalsRuntime(
     }
     throw error;
   } finally {
-    if (signal.aborted) {
+    if (signal.aborted && !failed) {
       dependencies.meter.recordHealth('stopping');
       metrics.recordLifecycle('stopping');
       await dependencies.repository.heartbeat(claim, 'stopped', dependencies.clock);

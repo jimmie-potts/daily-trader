@@ -1,4 +1,8 @@
-import { loadConfig, loadOptionalEnvironmentFile } from '@daily-trader/config';
+import {
+  loadConfig,
+  loadOptionalEnvironmentFile,
+  type ApplicationConfig,
+} from '@daily-trader/config';
 import type { ReactNode } from 'react';
 
 import {
@@ -10,6 +14,14 @@ import {
 loadOptionalEnvironmentFile();
 
 export const dynamic = 'force-dynamic';
+
+export function buildPortfolioApiBaseUrl(
+  host: ApplicationConfig['api']['host'],
+  port: number,
+): string {
+  const authorityHost = host === '::1' ? `[${host}]` : host;
+  return `http://${authorityHost}:${port}`;
+}
 
 function ExactValue({ value, suffix = '' }: { value: string | null; suffix?: string }): ReactNode {
   return value === null ? (
@@ -274,7 +286,7 @@ export function PortfolioDashboard({
 export default async function PortfolioStatusPage(): Promise<ReactNode> {
   const config = loadConfig();
   const result = await loadPortfolioDashboard({
-    apiBaseUrl: `http://${config.api.host}:${config.api.port}`,
+    apiBaseUrl: buildPortfolioApiBaseUrl(config.api.host, config.api.port),
   });
 
   return <PortfolioDashboard result={result} />;

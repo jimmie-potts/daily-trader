@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import { PortfolioError } from './errors.js';
-import { parsePortfolioSyncSnapshot, serializePortfolioSyncSnapshot } from './serialization.js';
-import { syncSnapshot } from './test-helpers.js';
+import { hashPortfolioCanonical } from './identity.js';
+import {
+  parsePortfolioSyncSnapshot,
+  serializePortfolioOrderObservation,
+  serializePortfolioSyncSnapshot,
+} from './serialization.js';
+import { mlegParentOrderObservation, orderObservation, syncSnapshot } from './test-helpers.js';
 
 type MutableRecord = Record<string, unknown>;
+
+const LEGACY_ORDER_ID = '010e68b98b3dc92eec77a882f0d2cba26f23bd963c1a925716ef8073a641ea17';
+const LEGACY_SNAPSHOT_ID = '9e9301c6e2d9861de98bdf3e9c51ebf9d556e2a24325c0806bb7c22614d308e8';
+const LEGACY_PAYLOAD_SHA256 = '593e61f2824263b8d721ef1ba8c8a738031beca07415a5a24a4195f802d58434';
 
 function canonicalPayload(): string {
   return serializePortfolioSyncSnapshot(syncSnapshot());
@@ -12,6 +21,21 @@ function canonicalPayload(): string {
 
 function decodedPayload(): MutableRecord {
   return JSON.parse(canonicalPayload()) as MutableRecord;
+}
+
+function legacyV1Payload(): string {
+  const current = syncSnapshot({ positions: [], fills: [] });
+  const legacyOrder = {
+    ...current.orders[0]!,
+    schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+    orderObservationId: LEGACY_ORDER_ID,
+  };
+  return JSON.stringify({
+    ...current,
+    schemaVersion: 'daily-trader.portfolio.sync-snapshot.v1',
+    orders: [legacyOrder],
+    snapshotId: LEGACY_SNAPSHOT_ID,
+  });
 }
 
 function record(value: unknown): MutableRecord {
@@ -47,6 +71,20 @@ describe('parsePortfolioSyncSnapshot', () => {
     expect(Object.isFrozen(parsed.fills)).toBe(true);
   });
 
+  it('restores a known legacy v1 snapshot without changing its IDs or canonical bytes', () => {
+    const source = legacyV1Payload();
+    const parsed = parsePortfolioSyncSnapshot(source);
+
+    expect(hashPortfolioCanonical(source)).toBe(LEGACY_PAYLOAD_SHA256);
+    expect(parsed.schemaVersion).toBe('daily-trader.portfolio.sync-snapshot.v1');
+    expect(parsed.snapshotId).toBe(LEGACY_SNAPSHOT_ID);
+    expect(parsed.orders[0]).toMatchObject({
+      schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+      orderObservationId: LEGACY_ORDER_ID,
+    });
+    expect(serializePortfolioSyncSnapshot(parsed)).toBe(source);
+  });
+
   it('accepts a canonical decoded object or an already-normalized snapshot', () => {
     const source = canonicalPayload();
     const fromObject = parsePortfolioSyncSnapshot(JSON.parse(source) as unknown);
@@ -72,6 +110,101 @@ describe('parsePortfolioSyncSnapshot', () => {
     expect(serializePortfolioSyncSnapshot(replayed)).toBe(source);
     expect(serializePortfolioSyncSnapshot(parsePortfolioSyncSnapshot(source))).toBe(source);
   });
+
+  it('round-trips nullable mleg parent facts in the current v2 schemas', () => {
+    const snapshot = syncSnapshot({ orders: [mlegParentOrderObservation()], fills: [] });
+    const source = serializePortfolioSyncSnapshot(snapshot);
+    const replayed = parsePortfolioSyncSnapshot(source);
+
+    expect(replayed.orders).toHaveLength(1);
+    expect(replayed.orders[0]).toMatchObject({
+      schemaVersion: 'daily-trader.portfolio.order-observation.v2',
+      assetFingerprint: null,
+      symbol: null,
+      instrument: null,
+      providerAssetClass: null,
+      side: null,
+      orderClass: 'mleg',
+      support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+    });
+    expect(replayed.schemaVersion).toBe('daily-trader.portfolio.sync-snapshot.v2');
+    expect(serializePortfolioSyncSnapshot(replayed)).toBe(source);
+  });
+
+  it('rejects mixed root and nested order versions even with a recomputed root hash', () => {
+    const payload = JSON.parse(legacyV1Payload()) as MutableRecord;
+    payload.schemaVersion = 'daily-trader.portfolio.sync-snapshot.v2';
+    const content = { ...payload };
+    delete content.snapshotId;
+    payload.snapshotId = hashPortfolioCanonical(JSON.stringify(content));
+
+    expectSerializationInvalid(() => parsePortfolioSyncSnapshot(payload));
+  });
+
+  it('rejects the inverse v1-root and v2-order mix with a recomputed root hash', () => {
+    const payload = decodedPayload();
+    payload.schemaVersion = 'daily-trader.portfolio.sync-snapshot.v1';
+    const content = { ...payload };
+    delete content.snapshotId;
+    payload.snapshotId = hashPortfolioCanonical(JSON.stringify(content));
+
+    expectSerializationInvalid(() => parsePortfolioSyncSnapshot(payload));
+  });
+
+  it('translates a forged unknown order version into the serializer error contract', () => {
+    const forged = {
+      ...orderObservation(),
+      schemaVersion: 'daily-trader.portfolio.order-observation.v999',
+    };
+
+    expectSerializationInvalid(() =>
+      serializePortfolioOrderObservation(
+        forged as unknown as Parameters<typeof serializePortfolioOrderObservation>[0],
+      ),
+    );
+  });
+
+  it('rejects the v2-only structure reason from a legacy order with recomputed hashes', () => {
+    const payload = JSON.parse(legacyV1Payload()) as MutableRecord;
+    const order = record(array(payload.orders)[0]);
+    order.orderClass = 'mleg';
+    order.support = { state: 'unsupported', reason: 'unsupported_order_structure' };
+    const orderContent = { ...order };
+    delete orderContent.orderObservationId;
+    const orderIdentity = Object.fromEntries(
+      Object.entries(orderContent).filter(
+        ([name]) => name !== 'observedAt' && name !== 'sourceRequestFingerprint',
+      ),
+    );
+    order.orderObservationId = hashPortfolioCanonical(JSON.stringify(orderIdentity));
+    const snapshotContent = { ...payload };
+    delete snapshotContent.snapshotId;
+    payload.snapshotId = hashPortfolioCanonical(JSON.stringify(snapshotContent));
+
+    expectSerializationInvalid(() => parsePortfolioSyncSnapshot(payload));
+  });
+
+  it.each(['symbol', 'providerAssetClass', 'side', 'orderType'])(
+    'retains the legacy v1 non-null requirement for %s',
+    (field) => {
+      const payload = JSON.parse(legacyV1Payload()) as MutableRecord;
+      const order = record(array(payload.orders)[0]);
+      order[field] = null;
+      const orderContent = { ...order };
+      delete orderContent.orderObservationId;
+      const orderIdentity = Object.fromEntries(
+        Object.entries(orderContent).filter(
+          ([name]) => name !== 'observedAt' && name !== 'sourceRequestFingerprint',
+        ),
+      );
+      order.orderObservationId = hashPortfolioCanonical(JSON.stringify(orderIdentity));
+      const snapshotContent = { ...payload };
+      delete snapshotContent.snapshotId;
+      payload.snapshotId = hashPortfolioCanonical(JSON.stringify(snapshotContent));
+
+      expectSerializationInvalid(() => parsePortfolioSyncSnapshot(payload));
+    },
+  );
 
   it.each(['', ' ', '{', 'null', '[]', 'true', '42', '"snapshot"'])(
     'rejects malformed or non-object stored JSON %j',

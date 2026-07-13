@@ -298,7 +298,7 @@ const environmentSchema = z
     PORTFOLIO_FILL_PAGE_SIZE: integerString('100', 1, 100),
     PORTFOLIO_MAX_POSITIONS: integerString('1000', 1, 10_000),
     PORTFOLIO_MAX_ORDERS: integerString('5000', 1, 50_000),
-    PORTFOLIO_MAX_FILLS_PER_SYNC: integerString('5000', 1, 50_000),
+    PORTFOLIO_MAX_FILLS_PER_SYNC: integerString('1999', 1, 50_000),
     PORTFOLIO_RETRY_MAX_ATTEMPTS: integerString('3', 1, 5),
     PORTFOLIO_RETRY_BASE_DELAY_MS: integerString('250', 100, 30_000),
     PORTFOLIO_RETRY_MAX_DELAY_MS: integerString('5000', 100, 120_000),
@@ -458,6 +458,30 @@ const environmentSchema = z
         code: 'custom',
         message: 'must be less than or equal to PORTFOLIO_RETRY_MAX_DELAY_MS',
         path: ['PORTFOLIO_RETRY_BASE_DELAY_MS'],
+      });
+    }
+
+    if (
+      environment.PORTFOLIO_MAX_ORDERS >=
+      environment.PORTFOLIO_MAX_PAGES * environment.PORTFOLIO_ORDER_PAGE_SIZE
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'must be less than PORTFOLIO_MAX_PAGES multiplied by PORTFOLIO_ORDER_PAGE_SIZE so complete pagination can be observed',
+        path: ['PORTFOLIO_MAX_ORDERS'],
+      });
+    }
+
+    if (
+      environment.PORTFOLIO_MAX_FILLS_PER_SYNC >=
+      environment.PORTFOLIO_MAX_PAGES * environment.PORTFOLIO_FILL_PAGE_SIZE
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'must be less than PORTFOLIO_MAX_PAGES multiplied by PORTFOLIO_FILL_PAGE_SIZE so complete pagination can be observed',
+        path: ['PORTFOLIO_MAX_FILLS_PER_SYNC'],
       });
     }
 

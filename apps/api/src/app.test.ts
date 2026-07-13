@@ -100,7 +100,7 @@ describe('GET /v1/portfolio', () => {
     items: [],
   };
   const emptyOrdersPage: PortfolioApiOrdersPage = {
-    schemaVersion: 'daily-trader.portfolio.orders-page.v1',
+    schemaVersion: 'daily-trader.portfolio.orders-page.v2',
     access: 'read_only',
     environment: 'paper',
     executionEnabled: false,
@@ -216,7 +216,7 @@ describe('GET /v1/portfolio', () => {
 
   it.each([
     ['positions', 'daily-trader.portfolio.positions-page.v1'],
-    ['orders', 'daily-trader.portfolio.orders-page.v1'],
+    ['orders', 'daily-trader.portfolio.orders-page.v2'],
     ['fills', 'daily-trader.portfolio.fills-page.v1'],
   ] as const)(
     'serves bounded GET-only %s pages without caching',

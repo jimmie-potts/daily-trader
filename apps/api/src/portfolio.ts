@@ -80,14 +80,14 @@ interface PositionPageRow extends PositionRow {
 }
 
 interface OrderPageRow extends Readonly<Record<string, unknown>> {
-  readonly symbol: string;
+  readonly symbol: string | null;
   readonly venue: string | null;
-  readonly asset_class: string;
+  readonly asset_class: string | null;
   readonly supported_for_monitoring: boolean;
   readonly unsupported_reason: string | null;
-  readonly side: string;
+  readonly side: string | null;
   readonly position_intent: string | null;
-  readonly order_type: string;
+  readonly order_type: string | null;
   readonly time_in_force: string;
   readonly order_class: string | null;
   readonly status: string;
@@ -178,14 +178,14 @@ export interface PortfolioApiPositionObservation extends PortfolioApiPosition {
 }
 
 export interface PortfolioApiOrderObservation {
-  readonly symbol: string;
+  readonly symbol: string | null;
   readonly venue: string | null;
-  readonly assetClass: string;
+  readonly assetClass: string | null;
   readonly monitoringSupport: 'supported' | 'unsupported';
   readonly unsupportedReason: string | null;
-  readonly side: string;
+  readonly side: string | null;
   readonly providerPositionIntent: string | null;
-  readonly orderType: string;
+  readonly orderType: string | null;
   readonly timeInForce: string;
   readonly orderClass: string | null;
   readonly status: string;
@@ -261,7 +261,7 @@ export type PortfolioApiPositionsPage = PortfolioApiPage<
 >;
 
 export type PortfolioApiOrdersPage = PortfolioApiPage<
-  'daily-trader.portfolio.orders-page.v1',
+  'daily-trader.portfolio.orders-page.v2',
   PortfolioApiOrderObservation
 >;
 
@@ -645,7 +645,7 @@ function pageResponse<SchemaVersion extends string, Item>(input: {
   const snapshotAsOf = utc(input.snapshotAsOf);
   if (
     input.items.length > input.request.limit ||
-    input.request.offset + input.items.length > input.total ||
+    (input.items.length > 0 && input.request.offset + input.items.length > input.total) ||
     (input.request.offset < input.total && input.items.length === 0)
   ) {
     throw new TypeError('portfolio page membership is inconsistent');
@@ -731,7 +731,7 @@ export class PortfolioApiRepository {
     const selection = await this.#currentSelection();
     if (selection.sync_run_id === null) {
       return pageResponse({
-        schemaVersion: 'daily-trader.portfolio.orders-page.v1',
+        schemaVersion: 'daily-trader.portfolio.orders-page.v2',
         snapshotAsOf: null,
         request,
         total: 0,
@@ -784,7 +784,7 @@ export class PortfolioApiRepository {
       }),
     );
     return pageResponse({
-      schemaVersion: 'daily-trader.portfolio.orders-page.v1',
+      schemaVersion: 'daily-trader.portfolio.orders-page.v2',
       snapshotAsOf: selection.capture_completed_at,
       request,
       total: rowCount(count.total_count),

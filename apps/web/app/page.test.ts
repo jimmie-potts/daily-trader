@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import type { PortfolioDashboardSnapshot } from '../src/portfolio.js';
-import { PortfolioDashboard } from './page';
+import { buildPortfolioApiBaseUrl, PortfolioDashboard } from './page';
 
 const snapshot: PortfolioDashboardSnapshot = {
   schemaVersion: 'daily-trader.portfolio.api.v1',
@@ -60,6 +60,16 @@ const snapshot: PortfolioDashboardSnapshot = {
     initialBaseline: true,
   },
 };
+
+describe('portfolio dashboard API URL', () => {
+  it.each([
+    ['::1', 'http://[::1]:3001'],
+    ['127.0.0.1', 'http://127.0.0.1:3001'],
+    ['localhost', 'http://localhost:3001'],
+  ] as const)('formats the %s host for a URL authority', (host, expected) => {
+    expect(buildPortfolioApiBaseUrl(host, 3001)).toBe(expected);
+  });
+});
 
 describe('portfolio dashboard rendering', () => {
   it('renders exact read-only paper state and unsupported evidence without action controls', () => {

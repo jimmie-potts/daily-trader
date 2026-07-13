@@ -28,7 +28,7 @@ const DEFAULT_MAX_ORDER_PAGES = 20;
 const DEFAULT_MAX_FILL_PAGES = 20;
 const DEFAULT_MAX_POSITIONS = 1_000;
 const DEFAULT_MAX_ORDERS = 5_000;
-const DEFAULT_MAX_FILLS = 5_000;
+const DEFAULT_MAX_FILLS = 1_999;
 const MAX_RESPONSE_BYTES = 16_777_216;
 const MAX_PAGES = 100;
 const MAX_COLLECTION_ITEMS = 50_000;
@@ -79,6 +79,16 @@ function boundedPositiveInteger(
     throw new TypeError(`${name} must be a positive bounded integer`);
   }
   return candidate;
+}
+
+function defaultItemLimitWithinPageBudget(
+  defaultLimit: number,
+  maximumPages: number,
+  pageSize: number,
+): number {
+  // A short page is the only completion marker, so one slot in the raw page
+  // capacity cannot also be promised as a reachable collection item.
+  return Math.min(defaultLimit, maximumPages * pageSize - 1);
 }
 
 function credential(value: string, name: string): string {
@@ -340,16 +350,26 @@ export class AlpacaPaperTradingClient {
     );
     this.#maxOrders = boundedPositiveInteger(
       options.maxOrders,
-      DEFAULT_MAX_ORDERS,
+      defaultItemLimitWithinPageBudget(
+        DEFAULT_MAX_ORDERS,
+        this.#maxOrderPages,
+        this.#orderPageSize,
+      ),
       MAX_COLLECTION_ITEMS,
       'maxOrders',
     );
+    if (this.#maxOrders >= this.#maxOrderPages * this.#orderPageSize) {
+      throw new TypeError('maxOrders must be less than maxOrderPages multiplied by orderPageSize');
+    }
     this.#maxFills = boundedPositiveInteger(
       options.maxFills,
-      DEFAULT_MAX_FILLS,
+      defaultItemLimitWithinPageBudget(DEFAULT_MAX_FILLS, this.#maxFillPages, this.#fillPageSize),
       MAX_COLLECTION_ITEMS,
       'maxFills',
     );
+    if (this.#maxFills >= this.#maxFillPages * this.#fillPageSize) {
+      throw new TypeError('maxFills must be less than maxFillPages multiplied by fillPageSize');
+    }
   }
 
   public async capture(request: AlpacaCaptureRequest): Promise<AlpacaRawCapture> {

@@ -1,6 +1,10 @@
 import {
   PORTFOLIO_ARITHMETIC_POLICY_VERSION,
+  PORTFOLIO_ORDER_SCHEMA_VERSION,
+  PORTFOLIO_ORDER_SCHEMA_VERSION_V1,
   PORTFOLIO_REQUEST_RECEIPT_SCHEMA_VERSION,
+  PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION,
+  PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1,
   PORTFOLIO_VALUATION_POLICY_VERSION,
   createPortfolioPreparedProjection,
   hashPortfolioCanonical,
@@ -18,6 +22,7 @@ import {
   type PortfolioFingerprint,
   type PortfolioHoldingSupport,
   type PortfolioHoldingSupportReason,
+  type PortfolioOrderSchemaVersion,
   type PortfolioPreparedProjection,
   type PortfolioProjection,
   type PortfolioRequestReceipt,
@@ -73,6 +78,7 @@ interface LeaseRow extends SqlRow {
 
 interface SnapshotRow extends SqlRow {
   readonly sync_run_id: unknown;
+  readonly snapshot_schema_version: unknown;
   readonly snapshot_hash: unknown;
   readonly snapshot_payload: unknown;
   readonly prepared_projection_id: unknown;
@@ -109,6 +115,7 @@ interface PersistedPositionProjectionRow extends SqlRow {
 
 interface PersistedOrderProjectionRow extends SqlRow {
   readonly provider_order_id: unknown;
+  readonly schema_version: unknown;
   readonly canonical_hash: unknown;
   readonly supported_for_monitoring: unknown;
   readonly unsupported_reason: unknown;
@@ -128,8 +135,12 @@ const PORTFOLIO_SUPPORT_REASONS: readonly PortfolioHoldingSupportReason[] = [
   'missing_instrument',
   'unsupported_asset_class',
   'unsupported_currency',
+  'unsupported_order_structure',
   'unsupported_venue',
 ];
+const PORTFOLIO_POSITION_SUPPORT_REASONS = PORTFOLIO_SUPPORT_REASONS.filter(
+  (reason) => reason !== 'unsupported_order_structure',
+);
 
 function text(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) {
@@ -154,6 +165,7 @@ function holdingSupport(
   supported: unknown,
   reason: unknown,
   field: string,
+  allowedReasons: readonly PortfolioHoldingSupportReason[] = PORTFOLIO_SUPPORT_REASONS,
 ): PortfolioHoldingSupport {
   if (supported === true && reason === null) {
     return Object.freeze({ state: 'supported', reason: null });
@@ -161,7 +173,7 @@ function holdingSupport(
   if (
     supported === false &&
     typeof reason === 'string' &&
-    PORTFOLIO_SUPPORT_REASONS.includes(reason as PortfolioHoldingSupportReason)
+    allowedReasons.includes(reason as PortfolioHoldingSupportReason)
   ) {
     return Object.freeze({
       state: 'unsupported',
@@ -304,6 +316,7 @@ async function readPersistedPreparedProjection(
   database: Pick<SqlClient, 'query'>,
   syncRunId: string,
   snapshotId: PortfolioFingerprint,
+  expectedOrderSchemaVersion: PortfolioOrderSchemaVersion,
 ): Promise<
   Readonly<{
     prepared: PortfolioPreparedProjection;
@@ -334,7 +347,7 @@ async function readPersistedPreparedProjection(
     [syncRunId],
   );
   const orders = await database.query<PersistedOrderProjectionRow>(
-    `SELECT provider_order_id, canonical_hash,
+    `SELECT provider_order_id, canonical_hash, schema_version,
             supported_for_monitoring, unsupported_reason
        FROM portfolio_order_observations
       WHERE sync_run_id = $1
@@ -377,17 +390,27 @@ async function readPersistedPreparedProjection(
         row.supported_for_projection,
         row.unsupported_reason,
         'position support',
+        PORTFOLIO_POSITION_SUPPORT_REASONS,
       ),
     })),
-    orders: orders.rows.map((row) => ({
-      orderFingerprint: fingerprint(row.provider_order_id, 'order fingerprint'),
-      observationId: fingerprint(row.canonical_hash, 'order observation hash'),
-      support: holdingSupport(
-        row.supported_for_monitoring,
-        row.unsupported_reason,
-        'order support',
-      ),
-    })),
+    orders: orders.rows.map((row) => {
+      if (text(row.schema_version, 'order schema version') !== expectedOrderSchemaVersion) {
+        throw new PortfolioWorkerError(
+          'database_unavailable',
+          'Persisted portfolio order schema does not match its snapshot',
+          false,
+        );
+      }
+      return {
+        orderFingerprint: fingerprint(row.provider_order_id, 'order fingerprint'),
+        observationId: fingerprint(row.canonical_hash, 'order observation hash'),
+        support: holdingSupport(
+          row.supported_for_monitoring,
+          row.unsupported_reason,
+          'order support',
+        ),
+      };
+    }),
     fills: fills.rows.map((row) => ({
       fillFingerprint: fingerprint(row.provider_activity_id, 'fill fingerprint'),
       observationId: fingerprint(row.canonical_hash, 'fill observation hash'),
@@ -496,7 +519,7 @@ export class PortfolioRepository {
            account_fingerprint, configuration_version, configuration_hash,
            configuration_payload, claim_owner_id, claim_fence, capture_started_at
          ) VALUES ($1, 'pending', 'alpaca', 'paper',
-           'daily-trader.portfolio.sync-snapshot.v1', $2,
+           '${PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION}', $2,
            $3, $4, $5, $6, $7::bigint, $8::timestamptz)`,
         [
           input.syncRunId,
@@ -523,7 +546,8 @@ export class PortfolioRepository {
 
   public async readCurrentSnapshot(): Promise<CurrentPortfolioSnapshot | null> {
     const result = await this.#pool.query<SnapshotRow>(
-      `SELECT run.sync_run_id, run.snapshot_hash, run.snapshot_payload,
+      `SELECT run.sync_run_id, run.snapshot_schema_version,
+              run.snapshot_hash, run.snapshot_payload,
               reconciliation.prepared_projection_id,
               reconciliation.prepared_projection_payload,
               reconciliation.reconciliation_id,
@@ -543,10 +567,15 @@ export class PortfolioRepository {
       const syncRunId = text(row.sync_run_id, 'sync_run_id');
       const serializedSnapshot = text(row.snapshot_payload, 'snapshot_payload');
       const snapshot = parsePortfolioSyncSnapshot(serializedSnapshot);
+      const expectedOrderSchemaVersion =
+        snapshot.schemaVersion === PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1
+          ? PORTFOLIO_ORDER_SCHEMA_VERSION_V1
+          : PORTFOLIO_ORDER_SCHEMA_VERSION;
       const persisted = await readPersistedPreparedProjection(
         this.#pool,
         syncRunId,
         snapshot.snapshotId,
+        expectedOrderSchemaVersion,
       );
       const reconciliation = reconcilePortfolioProjection(
         snapshot,
@@ -554,6 +583,7 @@ export class PortfolioRepository {
         persisted.projectionId,
       );
       if (
+        text(row.snapshot_schema_version, 'snapshot schema version') !== snapshot.schemaVersion ||
         fingerprint(row.snapshot_hash, 'snapshot hash') !== snapshot.snapshotId ||
         serializePortfolioSyncSnapshot(snapshot) !== serializedSnapshot ||
         fingerprint(row.projection_hash, 'projection hash') !== persisted.projectionId ||
@@ -666,6 +696,7 @@ export class PortfolioRepository {
       !Number.isSafeInteger(input.finalCaptureAttempt) ||
       input.finalCaptureAttempt < 1 ||
       input.finalCaptureAttempt > 1_000 ||
+      snapshot.schemaVersion !== PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION ||
       snapshot.accountFingerprint !== handle.lease.accountFingerprint ||
       input.prepared.snapshotId !== snapshot.snapshotId ||
       input.prepared.portfolioResultId !== input.projection.projectionId ||
@@ -714,6 +745,7 @@ export class PortfolioRepository {
         client,
         handle.syncRunId,
         snapshot.snapshotId,
+        PORTFOLIO_ORDER_SCHEMA_VERSION,
       );
       const persistedStructuralPrepared = createPortfolioPreparedProjection({
         snapshotId: persisted.prepared.snapshotId,
@@ -781,6 +813,7 @@ export class PortfolioRepository {
                 snapshot_hash = $8,
                 snapshot_payload = $9
           WHERE sync_run_id = $10 AND state = 'pending'
+            AND snapshot_schema_version = '${PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION}'
             AND claim_owner_id = $11 AND claim_fence = $12::bigint
             AND EXISTS (
               SELECT 1 FROM portfolio_worker_status AS worker

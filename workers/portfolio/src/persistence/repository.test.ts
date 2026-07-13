@@ -48,7 +48,9 @@ function response(payload: unknown, requestId: string): Response {
   });
 }
 
-async function normalizedSnapshot(): Promise<PortfolioSyncSnapshot> {
+async function normalizedSnapshot(
+  overrides: Readonly<{ fills?: unknown; orders?: unknown }> = {},
+): Promise<PortfolioSyncSnapshot> {
   const fetch: AlpacaFetch = (input) => {
     const pathname = new URL(input).pathname;
     const resource = pathname.endsWith('/account/activities/FILL')
@@ -58,7 +60,13 @@ async function normalizedSnapshot(): Promise<PortfolioSyncSnapshot> {
         : pathname.endsWith('/positions')
           ? 'positions'
           : 'orders';
-    return Promise.resolve(response(fixture(resource), `repository-${resource}-request`));
+    const payload =
+      resource === 'orders'
+        ? (overrides.orders ?? fixture(resource))
+        : resource === 'fills'
+          ? (overrides.fills ?? fixture(resource))
+          : fixture(resource);
+    return Promise.resolve(response(payload, `repository-${resource}-request`));
   };
   return new AlpacaPaperPortfolioProvider(
     {
@@ -68,6 +76,10 @@ async function normalizedSnapshot(): Promise<PortfolioSyncSnapshot> {
     },
     { clock: CLOCK, fetch },
   ).capture({ previousActivityCutoverAt: null });
+}
+
+function mlegOrders(): readonly unknown[] {
+  return fixture('orders-mleg') as readonly unknown[];
 }
 
 function config(): PortfolioWorkerConfig {
@@ -103,6 +115,9 @@ class DeterministicSqlPool implements SqlPool {
   public receiptInsertAllowed = true;
   public receiptMatches = true;
   public tamperPersistedPosition = false;
+  public tamperPersistedPositionSupport = false;
+  public tamperPersistedOrderSchema = false;
+  public tamperSnapshotSchemaVersion = false;
   public readonly receiptRows: SqlRow[] = [];
   public readonly accountRows: SqlRow[] = [];
   public readonly positionRows: SqlRow[] = [];
@@ -195,14 +210,19 @@ class DeterministicSqlPool implements SqlPool {
       this.positionRows.push({
         provider_asset_id: parameters[2],
         canonical_hash: this.tamperPersistedPosition ? 'f'.repeat(64) : parameters[26],
-        supported_for_projection: parameters[9],
-        unsupported_reason: parameters[10],
+        supported_for_projection: this.tamperPersistedPositionSupport ? false : parameters[9],
+        unsupported_reason: this.tamperPersistedPositionSupport
+          ? 'unsupported_order_structure'
+          : parameters[10],
       });
       return queryResult<Row>([], 1);
     }
     if (sql.startsWith('INSERT INTO portfolio_order_observations')) {
       this.orderRows.push({
         provider_order_id: parameters[2],
+        schema_version: this.tamperPersistedOrderSchema
+          ? 'daily-trader.portfolio.order-observation.v1'
+          : parameters[1],
         canonical_hash: parameters[42],
         supported_for_monitoring: parameters[8],
         unsupported_reason: parameters[9],
@@ -247,12 +267,15 @@ class DeterministicSqlPool implements SqlPool {
             })) ?? []),
       );
     }
-    if (sql.startsWith('SELECT provider_order_id, canonical_hash')) {
+    if (sql.startsWith('SELECT provider_order_id, canonical_hash, schema_version')) {
       return queryResult<Row>(
         this.orderRows.length > 0
           ? this.orderRows
           : (snapshot?.orders.map((order) => ({
               provider_order_id: order.orderFingerprint,
+              schema_version: this.tamperPersistedOrderSchema
+                ? 'daily-trader.portfolio.order-observation.v1'
+                : order.schemaVersion,
               canonical_hash: order.orderObservationId,
               supported_for_monitoring: order.support.state === 'supported',
               unsupported_reason: order.support.reason,
@@ -281,7 +304,7 @@ class DeterministicSqlPool implements SqlPool {
         { canonical_hash: projectPortfolioSnapshot(snapshot, basis).projectionId },
       ]);
     }
-    if (sql.startsWith('SELECT run.sync_run_id, run.snapshot_hash')) {
+    if (sql.startsWith('SELECT run.sync_run_id, run.snapshot_schema_version')) {
       return this.currentSnapshot === null
         ? queryResult<Row>([], 0)
         : (() => {
@@ -302,6 +325,9 @@ class DeterministicSqlPool implements SqlPool {
               [
                 {
                   sync_run_id: this.currentSnapshot.syncRunId,
+                  snapshot_schema_version: this.tamperSnapshotSchemaVersion
+                    ? 'daily-trader.portfolio.sync-snapshot.v1'
+                    : current.schemaVersion,
                   snapshot_hash: current.snapshotId,
                   snapshot_payload: serializePortfolioSyncSnapshot(current),
                   prepared_projection_id: prepared.preparedProjectionId,
@@ -589,6 +615,9 @@ describe('PortfolioRepository complete-cycle promotion', () => {
     expect(pointerIndex).toBeGreaterThan(terminalIndex);
     expect(finalCommitIndex).toBeGreaterThan(pointerIndex);
     const terminalUpdate = pool.calls[terminalIndex];
+    expect(terminalUpdate?.text).toContain(
+      "snapshot_schema_version = 'daily-trader.portfolio.sync-snapshot.v2'",
+    );
     expect(terminalUpdate?.parameters.slice(13)).toEqual([
       snapshot.coverage.activityWindowStartedAt,
       snapshot.coverage.activityCutoverAt,
@@ -599,6 +628,7 @@ describe('PortfolioRepository complete-cycle promotion', () => {
       text.includes('INSERT INTO portfolio_sync_runs'),
     );
     expect(configurationInsert).toBeDefined();
+    expect(configurationInsert?.text).toContain("'daily-trader.portfolio.sync-snapshot.v2'");
     expect(JSON.stringify(configurationInsert?.parameters)).not.toMatch(
       /repository-fixture-(?:key|secret)|fixture-paper-account-id/u,
     );
@@ -632,6 +662,52 @@ describe('PortfolioRepository complete-cycle promotion', () => {
     );
     expect(projectionInsert?.parameters[2]).toBe('incomplete');
     expect(projectionInsert?.parameters[9]).toBeNull();
+  });
+
+  it('persists nullable mleg parent facts and concrete child identity without inference', async () => {
+    const snapshot = await normalizedSnapshot({ orders: mlegOrders() });
+    const pool = new DeterministicSqlPool();
+    const repository = new PortfolioRepository(pool, config());
+    const handle = await begin(repository, snapshot, 'portfolio-sync-mleg');
+    await recordSnapshotReceipts(repository, handle, snapshot);
+
+    await repository.completeSync(completionInput(handle, snapshot));
+
+    const orderInserts = pool.calls.filter(({ text }) =>
+      text.includes('INSERT INTO portfolio_order_observations'),
+    );
+    expect(orderInserts).toHaveLength(4);
+    expect(
+      orderInserts.every(
+        ({ parameters }) => parameters[1] === 'daily-trader.portfolio.order-observation.v2',
+      ),
+    ).toBe(true);
+    const parent = orderInserts.find(({ parameters }) => parameters[5] === null);
+    const child = orderInserts.find(({ parameters }) => parameters.includes('AAPL260116C00200001'));
+    expect(parent?.parameters.slice(4, 14)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      false,
+      'unsupported_order_structure',
+      expect.any(String),
+      null,
+      null,
+      'limit',
+    ]);
+    expect(child?.parameters.slice(4, 14)).toEqual([
+      expect.any(String),
+      'AAPL260116C00200001',
+      null,
+      'us_option',
+      false,
+      'unsupported_order_structure',
+      expect.any(String),
+      'buy',
+      'buy_to_open',
+      null,
+    ]);
   });
 
   it('writes candidates without a worker-row lock and rolls back lease loss before promotion', async () => {
@@ -669,6 +745,27 @@ describe('PortfolioRepository complete-cycle promotion', () => {
     expect(
       pool.calls.some(({ text }) => text.startsWith('INSERT INTO portfolio_current_snapshot')),
     ).toBe(false);
+  });
+
+  it('rejects a legacy snapshot before writing into a new v2 synchronization run', async () => {
+    const current = await normalizedSnapshot();
+    const snapshot: PortfolioSyncSnapshot = Object.freeze({
+      ...current,
+      schemaVersion: 'daily-trader.portfolio.sync-snapshot.v1',
+    });
+    const pool = new DeterministicSqlPool();
+    const repository = new PortfolioRepository(pool, config());
+    const handle = Object.freeze({
+      syncRunId: 'portfolio-sync-legacy-candidate',
+      lease: lease(snapshot),
+      captureStartedAt: snapshot.knowledgeInterval.captureStartedAt,
+    });
+
+    await expect(repository.completeSync(completionInput(handle, snapshot))).rejects.toMatchObject({
+      code: 'projection_failed',
+      retryable: false,
+    });
+    expect(pool.calls).toEqual([]);
   });
 
   it('rejects a final attempt with partial receipt membership before writing candidate rows', async () => {
@@ -726,6 +823,36 @@ describe('PortfolioRepository complete-cycle promotion', () => {
     ).toBe(false);
   });
 
+  it('rejects the order-only unsupported structure reason on persisted positions', async () => {
+    const snapshot = await normalizedSnapshot();
+    const pool = new DeterministicSqlPool();
+    pool.tamperPersistedPositionSupport = true;
+    const repository = new PortfolioRepository(pool, config());
+    const handle = await begin(repository, snapshot, 'portfolio-sync-position-support-drift');
+    await recordSnapshotReceipts(repository, handle, snapshot);
+
+    await expect(repository.completeSync(completionInput(handle, snapshot))).rejects.toMatchObject({
+      code: 'database_unavailable',
+      retryable: false,
+    });
+    expect(pool.calls.some(({ text }) => text === 'ROLLBACK')).toBe(true);
+  });
+
+  it('rejects persisted order rows whose schema metadata does not match the v2 snapshot', async () => {
+    const snapshot = await normalizedSnapshot();
+    const pool = new DeterministicSqlPool();
+    pool.tamperPersistedOrderSchema = true;
+    const repository = new PortfolioRepository(pool, config());
+    const handle = await begin(repository, snapshot, 'portfolio-sync-order-schema-drift');
+    await recordSnapshotReceipts(repository, handle, snapshot);
+
+    await expect(repository.completeSync(completionInput(handle, snapshot))).rejects.toMatchObject({
+      code: 'database_unavailable',
+      retryable: false,
+    });
+    expect(pool.calls.some(({ text }) => text === 'ROLLBACK')).toBe(true);
+  });
+
   it('rolls back all candidate rows and never changes the pointer when completion is fenced', async () => {
     const snapshot = await normalizedSnapshot();
     const pool = new DeterministicSqlPool();
@@ -766,6 +893,22 @@ describe('PortfolioRepository complete-cycle promotion', () => {
         text.startsWith("UPDATE portfolio_sync_runs SET state = 'failed'"),
       ),
     ).toBe(true);
+  });
+
+  it('rejects current snapshot metadata whose declared schema differs from canonical bytes', async () => {
+    const pool = new DeterministicSqlPool();
+    pool.currentSnapshot = Object.freeze({
+      syncRunId: 'portfolio-sync-schema-drift',
+      snapshot: await normalizedSnapshot(),
+    });
+    pool.tamperSnapshotSchemaVersion = true;
+
+    await expect(
+      new PortfolioRepository(pool, config()).readCurrentSnapshot(),
+    ).rejects.toMatchObject({
+      code: 'database_unavailable',
+      retryable: false,
+    });
   });
 });
 

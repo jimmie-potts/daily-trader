@@ -92,6 +92,13 @@ function nullableText(value: JsonRecord, key: string, allowEmpty = false): strin
   return candidate === null ? null : providerText(candidate, allowEmpty);
 }
 
+function absentOrEmptyText(value: JsonRecord, key: string): string | null {
+  const candidate = value[key];
+  return candidate === undefined || candidate === null || candidate === ''
+    ? null
+    : providerText(candidate);
+}
+
 function boolean(value: JsonRecord, key: string): boolean {
   const candidate = value[key];
   if (typeof candidate !== 'boolean') throw malformed('ALPACA_BOOLEAN_INVALID');
@@ -299,6 +306,8 @@ function normalizePosition(
 interface RawOrder {
   readonly metadata: AlpacaResponseMetadata;
   readonly payload: JsonRecord;
+  readonly role: 'parent' | 'leg';
+  readonly mlegContext: boolean;
 }
 
 function flattenOrders(capture: AlpacaRawCapture): readonly RawOrder[] {
@@ -306,7 +315,10 @@ function flattenOrders(capture: AlpacaRawCapture): readonly RawOrder[] {
   for (const page of capture.orders) {
     for (const item of page.payload) {
       const parent = record(item);
-      orders.push(Object.freeze({ metadata: page.metadata, payload: parent }));
+      const mlegContext = parent.order_class === 'mleg';
+      orders.push(
+        Object.freeze({ metadata: page.metadata, payload: parent, role: 'parent', mlegContext }),
+      );
       const legs = parent.legs;
       if (legs === null) continue;
       if (!Array.isArray(legs) || legs.length > MAX_ORDER_LEGS) {
@@ -321,7 +333,9 @@ function flattenOrders(capture: AlpacaRawCapture): readonly RawOrder[] {
         ) {
           throw malformed('ALPACA_ORDER_LEGS_NESTED');
         }
-        orders.push(Object.freeze({ metadata: page.metadata, payload: child }));
+        orders.push(
+          Object.freeze({ metadata: page.metadata, payload: child, role: 'leg', mlegContext }),
+        );
       }
     }
   }
@@ -330,38 +344,74 @@ function flattenOrders(capture: AlpacaRawCapture): readonly RawOrder[] {
 
 interface NormalizedOrder {
   readonly rawOrderId: string;
+  readonly role: RawOrder['role'];
+  readonly mlegContext: boolean;
   readonly observation: PortfolioOrderObservation;
 }
 
 function normalizeOrder(
   source: JsonRecord,
   metadata: AlpacaResponseMetadata,
+  role: RawOrder['role'],
+  mlegContext: boolean,
   accountFingerprint: ReturnType<typeof sourceFingerprint>,
   accountCurrency: string,
   positionsByAsset: ReadonlyMap<string, PortfolioPositionObservation>,
 ): NormalizedOrder {
   const rawOrderId = requiredText(source, 'id');
-  const rawAssetId = nullableText(source, 'asset_id');
-  const symbol = requiredText(source, 'symbol');
-  const providerAssetClass = requiredText(source, 'asset_class');
+  const providerOrderClass =
+    role === 'leg' && mlegContext
+      ? absentOrEmptyText(source, 'order_class')
+      : nullableText(source, 'order_class', true);
+  if (providerOrderClass !== null) {
+    enumValue(providerOrderClass, ORDER_CLASSES, 'ALPACA_ORDER_CLASS_UNSUPPORTED');
+  }
+  if (
+    role === 'leg' &&
+    mlegContext &&
+    providerOrderClass !== null &&
+    providerOrderClass !== 'mleg' &&
+    providerOrderClass !== 'simple'
+  ) {
+    throw malformed('ALPACA_ORDER_CLASS_UNSUPPORTED');
+  }
+  // Nested containment is the canonical structure fact: Alpaca legs may
+  // repeat mleg or expose simple/empty class values without changing that fact.
+  const orderClass = role === 'leg' && mlegContext ? 'mleg' : providerOrderClass;
+  const isMlegParent = role === 'parent' && orderClass === 'mleg';
+  const isMlegLeg = role === 'leg' && mlegContext;
+  const rawAssetId = isMlegParent
+    ? absentOrEmptyText(source, 'asset_id')
+    : nullableText(source, 'asset_id');
+  const symbol = isMlegParent
+    ? absentOrEmptyText(source, 'symbol')
+    : requiredText(source, 'symbol');
+  const providerAssetClass = isMlegParent
+    ? absentOrEmptyText(source, 'asset_class')
+    : requiredText(source, 'asset_class');
+  const side = isMlegParent ? absentOrEmptyText(source, 'side') : requiredText(source, 'side');
+  const incompleteSingularIdentity =
+    symbol === null || providerAssetClass === null || side === null;
   const linkedPosition = rawAssetId === null ? undefined : positionsByAsset.get(rawAssetId);
   if (
     linkedPosition !== undefined &&
-    (linkedPosition.symbol !== symbol || linkedPosition.providerAssetClass !== providerAssetClass)
+    ((symbol !== null && linkedPosition.symbol !== symbol) ||
+      (providerAssetClass !== null && linkedPosition.providerAssetClass !== providerAssetClass))
   ) {
     throw malformed('ALPACA_ORDER_ASSET_INCONSISTENT');
   }
-  const instrument = linkedPosition?.instrument ?? null;
+  const instrument = incompleteSingularIdentity ? null : (linkedPosition?.instrument ?? null);
   const providerStatus = requiredText(source, 'status');
   const state = orderState(providerStatus);
-  const orderType = enumValue(
-    requiredText(source, 'type'),
-    ORDER_TYPES,
-    'ALPACA_ORDER_TYPE_UNSUPPORTED',
-  );
-  const orderClass = nullableText(source, 'order_class', true);
-  if (orderClass !== null) {
-    enumValue(orderClass, ORDER_CLASSES, 'ALPACA_ORDER_CLASS_UNSUPPORTED');
+  const orderTypeCandidate = isMlegLeg
+    ? absentOrEmptyText(source, 'type')
+    : requiredText(source, 'type');
+  const orderType =
+    orderTypeCandidate === null
+      ? null
+      : enumValue(orderTypeCandidate, ORDER_TYPES, 'ALPACA_ORDER_TYPE_UNSUPPORTED');
+  if (orderType === null && !isMlegLeg) {
+    throw malformed('ALPACA_ORDER_TYPE_UNSUPPORTED');
   }
   const positionIntent = nullableText(source, 'position_intent', true);
   if (positionIntent !== null && positionIntent !== '') {
@@ -395,6 +445,18 @@ function normalizeOrder(
   ) {
     throw malformed('ALPACA_ORDER_FILL_INCONSISTENT');
   }
+  const normalizedSupport =
+    isMlegParent || isMlegLeg
+      ? Object.freeze({
+          state: 'unsupported' as const,
+          reason: 'unsupported_order_structure' as const,
+        })
+      : providerAssetClass === null
+        ? (() => {
+            throw malformed('ALPACA_TEXT_INVALID');
+          })()
+        : (linkedPosition?.support ??
+          holdingSupport(providerAssetClass, accountCurrency, instrument, 'missing_instrument'));
   const observation = createPortfolioOrderObservation({
     accountFingerprint,
     sourceRequestFingerprint: requestFingerprint(metadata),
@@ -408,10 +470,8 @@ function normalizeOrder(
     symbol,
     instrument,
     providerAssetClass,
-    support:
-      linkedPosition?.support ??
-      holdingSupport(providerAssetClass, accountCurrency, instrument, 'missing_instrument'),
-    side: requiredText(source, 'side'),
+    support: normalizedSupport,
+    side,
     orderType,
     orderClass,
     positionIntent,
@@ -440,14 +500,14 @@ function normalizeOrder(
     replacedAt: nullableText(source, 'replaced_at'),
     expiredAt: nullableText(source, 'expired_at'),
   });
-  return Object.freeze({ rawOrderId, observation });
+  return Object.freeze({ rawOrderId, role, mlegContext, observation });
 }
 
 function normalizeFill(
   payload: unknown,
   metadata: AlpacaResponseMetadata,
   accountFingerprint: ReturnType<typeof sourceFingerprint>,
-  ordersById: ReadonlyMap<string, PortfolioOrderObservation>,
+  ordersById: ReadonlyMap<string, NormalizedOrder>,
 ): PortfolioFillObservation {
   const source = record(payload);
   if (requiredText(source, 'activity_type') !== 'FILL') {
@@ -455,9 +515,16 @@ function normalizeFill(
   }
   const rawOrderId = requiredText(source, 'order_id');
   const linkedOrder = ordersById.get(rawOrderId);
+  const linkedObservation = linkedOrder?.observation;
+  const aggregateMlegParent = linkedOrder?.role === 'parent' && linkedOrder.mlegContext;
   const symbol = requiredText(source, 'symbol');
   const side = requiredText(source, 'side');
-  if (linkedOrder !== undefined && (linkedOrder.symbol !== symbol || linkedOrder.side !== side)) {
+  if (
+    linkedObservation !== undefined &&
+    !aggregateMlegParent &&
+    ((linkedObservation.symbol !== null && linkedObservation.symbol !== symbol) ||
+      (linkedObservation.side !== null && linkedObservation.side !== side))
+  ) {
     throw malformed('ALPACA_FILL_ORDER_INCONSISTENT');
   }
   const type = requiredText(source, 'type');
@@ -477,11 +544,12 @@ function normalizeFill(
     throw malformed('ALPACA_FILL_LEAVES_INCONSISTENT');
   }
   if (
-    linkedOrder?.quantity !== null &&
-    linkedOrder?.quantity !== undefined &&
+    !aggregateMlegParent &&
+    linkedObservation?.quantity !== null &&
+    linkedObservation?.quantity !== undefined &&
     comparePortfolioDecimals(
       addPortfolioDecimals([cumulativeQuantity, leavesQuantity]),
-      linkedOrder.quantity,
+      linkedObservation.quantity,
     ) !== 0
   ) {
     throw malformed('ALPACA_FILL_ORDER_QUANTITY_INCONSISTENT');
@@ -489,7 +557,9 @@ function normalizeFill(
   const explicitAssetId = source.asset_id;
   const assetFingerprint =
     explicitAssetId === undefined
-      ? (linkedOrder?.assetFingerprint ?? null)
+      ? aggregateMlegParent
+        ? null
+        : (linkedObservation?.assetFingerprint ?? null)
       : nullableSourceFingerprint('asset', explicitAssetId);
   // Alpaca selected this response by an unreturned activity `created_at`.
   // `transaction_time` is the separate execution fact and cannot validate the
@@ -502,7 +572,7 @@ function normalizeFill(
     orderFingerprint: sourceFingerprint('order', rawOrderId),
     assetFingerprint,
     symbol,
-    instrument: linkedOrder?.instrument ?? null,
+    instrument: aggregateMlegParent ? null : (linkedObservation?.instrument ?? null),
     side,
     type,
     quantity,
@@ -540,18 +610,19 @@ export function normalizeAlpacaCapture(capture: AlpacaRawCapture): PortfolioSync
     if (positionsByAsset.size !== normalizedPositions.length) {
       throw malformed('ALPACA_POSITION_DUPLICATED');
     }
-    const normalizedOrders = flattenOrders(capture).map(({ metadata, payload }) =>
-      normalizeOrder(
-        payload,
-        metadata,
-        account.accountFingerprint,
-        account.currency,
-        positionsByAsset,
-      ),
+    const normalizedOrders = flattenOrders(capture).map(
+      ({ metadata, payload, role, mlegContext }) =>
+        normalizeOrder(
+          payload,
+          metadata,
+          role,
+          mlegContext,
+          account.accountFingerprint,
+          account.currency,
+          positionsByAsset,
+        ),
     );
-    const ordersById = new Map(
-      normalizedOrders.map(({ rawOrderId, observation }) => [rawOrderId, observation]),
-    );
+    const ordersById = new Map(normalizedOrders.map((order) => [order.rawOrderId, order]));
     if (ordersById.size !== normalizedOrders.length) {
       throw malformed('ALPACA_ORDER_DUPLICATED');
     }

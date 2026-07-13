@@ -80,6 +80,228 @@ function safeFingerprint(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+async function verifyMlegOrderConstraints(databaseUrl) {
+  await withClient(databaseUrl, 'daily-trader-phase4-verification-mleg', async (client) => {
+    await client.query('BEGIN');
+    try {
+      const sourceResult = await client.query(
+        `SELECT sync_run_id, provider_order_id
+           FROM portfolio_order_observations
+          ORDER BY sync_run_id, provider_order_id
+          LIMIT 1`,
+      );
+      const source = sourceResult.rows[0];
+      if (source === undefined) {
+        throw new Error('The mleg constraint verification requires one persisted order');
+      }
+      const pendingSyncRunId = 'portfolio-sync-phase4-mleg-constraints';
+      const requestFingerprint = safeFingerprint('phase4-mleg-constraint-request');
+      await client.query(
+        `INSERT INTO portfolio_sync_runs (
+           sync_run_id, state, source_provider, source_environment,
+           snapshot_schema_version, configuration_version, configuration_hash,
+           configuration_payload, claim_owner_id, claim_fence, capture_started_at
+         )
+         SELECT $1, 'pending', source_provider, source_environment,
+                snapshot_schema_version, configuration_version, configuration_hash,
+                configuration_payload, claim_owner_id, claim_fence, capture_started_at
+           FROM portfolio_sync_runs
+          WHERE sync_run_id = $2`,
+        [pendingSyncRunId, source.sync_run_id],
+      );
+      await client.query(
+        `INSERT INTO portfolio_sync_requests (
+           sync_run_id, schema_version, capture_attempt, resource, ordinal,
+           provider_request_fingerprint, observed_at, response_status
+         ) VALUES ($1, 'daily-trader.portfolio.request-receipt.v1', 1, 'orders', 0,
+                   $2, CURRENT_TIMESTAMP, 200)`,
+        [pendingSyncRunId, requestFingerprint],
+      );
+
+      const cloneOrder = async (label, facts) => {
+        const result = await client.query(
+          `INSERT INTO portfolio_order_observations
+           SELECT (jsonb_populate_record(
+             NULL::portfolio_order_observations,
+             to_jsonb(source_order) || jsonb_build_object(
+               'provider_order_id', $1::text,
+               'client_order_id', $2::text,
+               'provider_asset_id', $3::text,
+               'symbol', $4::text,
+               'instrument_id', $5::text,
+               'asset_class', $6::text,
+               'supported_for_monitoring', $7::boolean,
+               'unsupported_reason', $8::text,
+               'side', $9::text,
+               'position_intent', $10::text,
+               'order_type', $11::text,
+               'order_class', $12::text,
+               'sync_run_id', $13::text,
+               'source_request_fingerprint', $14::text,
+               'schema_version', $17::text
+             )
+           )).*
+             FROM portfolio_order_observations AS source_order
+            WHERE source_order.sync_run_id = $15
+              AND source_order.provider_order_id = $16`,
+          [
+            safeFingerprint(`phase4-mleg-order-${label}`),
+            safeFingerprint(`phase4-mleg-client-order-${label}`),
+            facts.assetId,
+            facts.symbol,
+            facts.instrumentId,
+            facts.assetClass,
+            facts.supported ?? false,
+            facts.reason ?? 'unsupported_order_structure',
+            facts.side,
+            facts.positionIntent,
+            facts.orderType,
+            facts.orderClass,
+            pendingSyncRunId,
+            requestFingerprint,
+            source.sync_run_id,
+            source.provider_order_id,
+            facts.schemaVersion ?? 'daily-trader.portfolio.order-observation.v2',
+          ],
+        );
+        if (result.rowCount !== 1) {
+          throw new Error(`The ${label} mleg constraint fixture was not inserted`);
+        }
+      };
+
+      await cloneOrder('parent', {
+        assetId: null,
+        symbol: null,
+        instrumentId: null,
+        assetClass: null,
+        side: null,
+        positionIntent: null,
+        orderType: 'limit',
+        orderClass: 'mleg',
+      });
+      await cloneOrder('leg', {
+        assetId: safeFingerprint('phase4-mleg-leg-asset'),
+        symbol: 'AAPL260116C00200001',
+        instrumentId: null,
+        assetClass: 'us_option',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: null,
+        orderClass: 'mleg',
+      });
+      await cloneOrder('complete', {
+        assetId: safeFingerprint('phase4-mleg-complete-asset'),
+        symbol: 'MSFT',
+        instrumentId: null,
+        assetClass: 'us_equity',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: 'limit',
+        orderClass: 'mleg',
+      });
+      await cloneOrder('legacy-v1-complete', {
+        assetId: safeFingerprint('phase4-legacy-v1-asset'),
+        symbol: 'MSFT',
+        instrumentId: null,
+        assetClass: 'us_equity',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: 'limit',
+        orderClass: 'simple',
+        reason: 'missing_instrument',
+        schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+      });
+
+      const expectConstraintRejection = async (label, facts) => {
+        await client.query('SAVEPOINT invalid_mleg_structure');
+        let rejection;
+        try {
+          await cloneOrder(label, facts);
+        } catch (error) {
+          rejection = error;
+        }
+        await client.query('ROLLBACK TO SAVEPOINT invalid_mleg_structure');
+        await client.query('RELEASE SAVEPOINT invalid_mleg_structure');
+        if (rejection?.code !== '23514') {
+          throw rejection ?? new Error(`The database accepted the invalid ${label} mleg row`);
+        }
+      };
+
+      await expectConstraintRejection('invalid-v1-nullable', {
+        assetId: null,
+        symbol: null,
+        instrumentId: null,
+        assetClass: null,
+        side: null,
+        positionIntent: null,
+        orderType: 'limit',
+        orderClass: 'mleg',
+        reason: 'missing_instrument',
+        schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+      });
+      await expectConstraintRejection('invalid-v1-nullable-type', {
+        assetId: safeFingerprint('phase4-mleg-invalid-v1-nullable-type-asset'),
+        symbol: 'MSFT',
+        instrumentId: null,
+        assetClass: 'us_equity',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: null,
+        orderClass: 'mleg',
+        reason: 'missing_instrument',
+        schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+      });
+      await expectConstraintRejection('invalid-v1-structure-reason', {
+        assetId: safeFingerprint('phase4-mleg-invalid-v1-asset'),
+        symbol: 'MSFT',
+        instrumentId: null,
+        assetClass: 'us_equity',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: 'limit',
+        orderClass: 'mleg',
+        schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+      });
+      await expectConstraintRejection('invalid-v2-non-mleg-structure-reason', {
+        assetId: safeFingerprint('phase4-mleg-invalid-v2-simple-asset'),
+        symbol: 'MSFT',
+        instrumentId: null,
+        assetClass: 'us_equity',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: 'limit',
+        orderClass: 'simple',
+      });
+      await expectConstraintRejection('invalid-null-class', {
+        assetId: null,
+        symbol: null,
+        instrumentId: null,
+        assetClass: null,
+        side: null,
+        positionIntent: null,
+        orderType: 'limit',
+        orderClass: null,
+      });
+      await expectConstraintRejection('invalid-null-class-type', {
+        assetId: safeFingerprint('phase4-mleg-invalid-type-asset'),
+        symbol: 'GOOG',
+        instrumentId: null,
+        assetClass: 'us_equity',
+        side: 'buy',
+        positionIntent: 'buy_to_open',
+        orderType: null,
+        orderClass: null,
+      });
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
+
+  process.stdout.write(
+    `${JSON.stringify({ event: 'phase4.mleg_order_constraints.verified', status: 'passed' })}\n`,
+  );
+}
+
 function isExactDecimalText(value) {
   return typeof value === 'string' && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value);
 }
@@ -98,15 +320,11 @@ function isUtcTimestamp(value) {
 
 function hasSafePageItem(resource, item) {
   if (item === null || typeof item !== 'object' || Array.isArray(item)) return false;
-  if (
-    typeof item.symbol !== 'string' ||
-    item.symbol.length === 0 ||
-    !isUtcTimestamp(item.observedAt)
-  ) {
-    return false;
-  }
+  if (!isUtcTimestamp(item.observedAt)) return false;
   if (resource === 'positions') {
     return (
+      typeof item.symbol === 'string' &&
+      item.symbol.length > 0 &&
       typeof item.assetClass === 'string' &&
       typeof item.currency === 'string' &&
       (item.side === 'long' || item.side === 'short') &&
@@ -130,11 +348,28 @@ function hasSafePageItem(resource, item) {
     );
   }
   if (resource === 'orders') {
+    const incompleteStructure =
+      item.symbol === null ||
+      item.assetClass === null ||
+      item.side === null ||
+      item.orderType === null;
+    const mlegStructure = item.orderClass === 'mleg';
     return (
-      typeof item.side === 'string' &&
-      typeof item.orderType === 'string' &&
+      (item.symbol === null || (typeof item.symbol === 'string' && item.symbol.length > 0)) &&
+      (item.assetClass === null || typeof item.assetClass === 'string') &&
+      (item.side === null || item.side === 'buy' || item.side === 'sell') &&
+      (item.orderType === null || typeof item.orderType === 'string') &&
       typeof item.timeInForce === 'string' &&
       typeof item.status === 'string' &&
+      (item.monitoringSupport === 'supported' || item.monitoringSupport === 'unsupported') &&
+      (item.monitoringSupport === 'supported'
+        ? item.unsupportedReason === null
+        : typeof item.unsupportedReason === 'string') &&
+      (!incompleteStructure || mlegStructure) &&
+      (mlegStructure
+        ? item.monitoringSupport === 'unsupported' &&
+          item.unsupportedReason === 'unsupported_order_structure'
+        : item.unsupportedReason !== 'unsupported_order_structure') &&
       (item.providerPositionIntent === null || typeof item.providerPositionIntent === 'string') &&
       [
         item.quantity,
@@ -152,6 +387,8 @@ function hasSafePageItem(resource, item) {
     );
   }
   return (
+    typeof item.symbol === 'string' &&
+    item.symbol.length > 0 &&
     (item.side === 'buy' || item.side === 'sell') &&
     (item.fillType === 'fill' || item.fillType === 'partial_fill') &&
     isExactDecimalText(item.quantity) &&
@@ -516,7 +753,7 @@ async function verifyApi(databaseUrl, environment, pass) {
       },
       {
         resource: 'orders',
-        schemaVersion: 'daily-trader.portfolio.orders-page.v1',
+        schemaVersion: 'daily-trader.portfolio.orders-page.v2',
         expectedTotal: body.observedOrders.count,
       },
       {
@@ -573,6 +810,31 @@ async function verifyApi(databaseUrl, environment, pass) {
         throw new Error(`The ${specification.resource} portfolio page count was incomplete`);
       }
       resourceCounts[specification.resource] = observedTotal;
+
+      const pastEndOffset = specification.expectedTotal + 1;
+      const pastEndResponse = await application.inject({
+        method: 'GET',
+        url: `/v1/portfolio/${specification.resource}?limit=1&offset=${String(pastEndOffset)}`,
+      });
+      const pastEndSerialized = pastEndResponse.body;
+      const pastEndPage = pastEndResponse.json();
+      if (
+        pastEndResponse.statusCode !== 200 ||
+        pastEndResponse.headers['cache-control'] !== 'no-store' ||
+        pastEndPage?.schemaVersion !== specification.schemaVersion ||
+        pastEndPage?.state !== 'available' ||
+        pastEndPage?.pagination?.limit !== 1 ||
+        pastEndPage?.pagination?.offset !== pastEndOffset ||
+        pastEndPage?.pagination?.returned !== 0 ||
+        pastEndPage?.pagination?.total !== specification.expectedTotal ||
+        pastEndPage?.pagination?.nextOffset !== null ||
+        !Array.isArray(pastEndPage?.items) ||
+        pastEndPage.items.length !== 0 ||
+        forbidden.some((value) => pastEndSerialized.includes(value))
+      ) {
+        throw new Error(`The ${specification.resource} past-end page was unstable`);
+      }
+      serializedPresentation.push(pastEndSerialized);
 
       const rejectedMutation = await application.inject({
         method: 'POST',
@@ -739,6 +1001,8 @@ try {
 
   activeStep = 'persistence';
   runScript('portfolio:fixture:persist', childEnvironment);
+  activeStep = 'mleg_migration_constraints';
+  await verifyMlegOrderConstraints(verificationDatabaseUrl.toString());
   activeStep = 'status';
   runScript('portfolio:status', childEnvironment);
   activeStep = 'api';

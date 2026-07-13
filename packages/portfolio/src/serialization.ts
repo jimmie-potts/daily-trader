@@ -4,15 +4,17 @@ import {
   PORTFOLIO_FILL_SCHEMA_VERSION,
   PORTFOLIO_MARK_SOURCE,
   PORTFOLIO_ORDER_SCHEMA_VERSION,
+  PORTFOLIO_ORDER_SCHEMA_VERSION_V1,
   PORTFOLIO_POSITION_SCHEMA_VERSION,
   PORTFOLIO_PROVIDER,
   PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION,
+  PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1,
   accountObservationContent,
   createPortfolioAccountObservation,
   createPortfolioFillObservation,
-  createPortfolioOrderObservation,
+  createPortfolioOrderObservationForSchema,
   createPortfolioPositionObservation,
-  createPortfolioSyncSnapshot,
+  createPortfolioSyncSnapshotForSchema,
   fillObservationContent,
   observationIdentityContent,
   orderObservationContent,
@@ -21,8 +23,10 @@ import {
   type PortfolioAccountObservation,
   type PortfolioFillObservation,
   type PortfolioOrderObservation,
+  type PortfolioOrderSchemaVersion,
   type PortfolioPositionObservation,
   type PortfolioSyncSnapshot,
+  type PortfolioSyncSnapshotSchemaVersion,
 } from './contracts.js';
 import { PortfolioError } from './errors.js';
 import { hashPortfolioCanonical } from './identity.js';
@@ -317,48 +321,69 @@ function parsePositionObservation(value: unknown): PortfolioPositionObservation 
   return observation;
 }
 
+function orderSchemaVersion(value: unknown): PortfolioOrderSchemaVersion {
+  if (value === PORTFOLIO_ORDER_SCHEMA_VERSION_V1) {
+    return PORTFOLIO_ORDER_SCHEMA_VERSION_V1;
+  }
+  if (value === PORTFOLIO_ORDER_SCHEMA_VERSION) return PORTFOLIO_ORDER_SCHEMA_VERSION;
+  return invalidSerialization();
+}
+
+function snapshotSchemaVersion(value: unknown): PortfolioSyncSnapshotSchemaVersion {
+  if (value === PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1) {
+    return PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1;
+  }
+  if (value === PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION) {
+    return PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION;
+  }
+  return invalidSerialization();
+}
+
 function parseOrderObservation(value: unknown): PortfolioOrderObservation {
   const record = exactRecord(value, ORDER_OBSERVATION_KEYS);
-  const observation = createPortfolioOrderObservation({
-    accountFingerprint: record.accountFingerprint,
-    sourceRequestFingerprint: record.sourceRequestFingerprint,
-    observedAt: record.observedAt,
-    orderFingerprint: record.orderFingerprint,
-    clientOrderFingerprint: record.clientOrderFingerprint,
-    assetFingerprint: record.assetFingerprint,
-    symbol: record.symbol,
-    instrument: instrument(record.instrument),
-    providerAssetClass: record.providerAssetClass,
-    side: record.side,
-    orderType: record.orderType,
-    orderClass: record.orderClass,
-    positionIntent: record.positionIntent,
-    timeInForce: record.timeInForce,
-    providerStatus: record.providerStatus,
-    state: record.state,
-    support: support(record.support),
-    extendedHours: record.extendedHours,
-    quantity: record.quantity,
-    notional: record.notional,
-    filledQuantity: record.filledQuantity,
-    filledAveragePrice: record.filledAveragePrice,
-    limitPrice: record.limitPrice,
-    stopPrice: record.stopPrice,
-    commission: record.commission,
-    trailPercent: record.trailPercent,
-    trailPrice: record.trailPrice,
-    highWaterMark: record.highWaterMark,
-    replacedByFingerprint: record.replacedByFingerprint,
-    replacesFingerprint: record.replacesFingerprint,
-    createdAt: providerTimestampOriginal(record.createdAt),
-    submittedAt: optionalProviderTimestampOriginal(record.submittedAt),
-    updatedAt: optionalProviderTimestampOriginal(record.updatedAt),
-    filledAt: optionalProviderTimestampOriginal(record.filledAt),
-    canceledAt: optionalProviderTimestampOriginal(record.canceledAt),
-    failedAt: optionalProviderTimestampOriginal(record.failedAt),
-    replacedAt: optionalProviderTimestampOriginal(record.replacedAt),
-    expiredAt: optionalProviderTimestampOriginal(record.expiredAt),
-  });
+  const observation = createPortfolioOrderObservationForSchema(
+    {
+      accountFingerprint: record.accountFingerprint,
+      sourceRequestFingerprint: record.sourceRequestFingerprint,
+      observedAt: record.observedAt,
+      orderFingerprint: record.orderFingerprint,
+      clientOrderFingerprint: record.clientOrderFingerprint,
+      assetFingerprint: record.assetFingerprint,
+      symbol: record.symbol,
+      instrument: instrument(record.instrument),
+      providerAssetClass: record.providerAssetClass,
+      side: record.side,
+      orderType: record.orderType,
+      orderClass: record.orderClass,
+      positionIntent: record.positionIntent,
+      timeInForce: record.timeInForce,
+      providerStatus: record.providerStatus,
+      state: record.state,
+      support: support(record.support),
+      extendedHours: record.extendedHours,
+      quantity: record.quantity,
+      notional: record.notional,
+      filledQuantity: record.filledQuantity,
+      filledAveragePrice: record.filledAveragePrice,
+      limitPrice: record.limitPrice,
+      stopPrice: record.stopPrice,
+      commission: record.commission,
+      trailPercent: record.trailPercent,
+      trailPrice: record.trailPrice,
+      highWaterMark: record.highWaterMark,
+      replacedByFingerprint: record.replacedByFingerprint,
+      replacesFingerprint: record.replacesFingerprint,
+      createdAt: providerTimestampOriginal(record.createdAt),
+      submittedAt: optionalProviderTimestampOriginal(record.submittedAt),
+      updatedAt: optionalProviderTimestampOriginal(record.updatedAt),
+      filledAt: optionalProviderTimestampOriginal(record.filledAt),
+      canceledAt: optionalProviderTimestampOriginal(record.canceledAt),
+      failedAt: optionalProviderTimestampOriginal(record.failedAt),
+      replacedAt: optionalProviderTimestampOriginal(record.replacedAt),
+      expiredAt: optionalProviderTimestampOriginal(record.expiredAt),
+    },
+    orderSchemaVersion(record.schemaVersion),
+  );
   assertStoredId(record.orderObservationId, observation.orderObservationId);
   return observation;
 }
@@ -429,15 +454,22 @@ export function serializePortfolioPositionObservation(value: PortfolioPositionOb
 }
 
 export function serializePortfolioOrderObservation(value: PortfolioOrderObservation): string {
-  return checkedSerialization(
-    matchesExpectedLiteral(value.schemaVersion, PORTFOLIO_ORDER_SCHEMA_VERSION) &&
-      matchesExpectedLiteral(value.provider, PORTFOLIO_PROVIDER) &&
-      matchesExpectedLiteral(value.brokerEnvironment, PORTFOLIO_BROKER_ENVIRONMENT),
-    orderObservationContent(value),
-    value.orderObservationId,
-    'orderObservationId',
-    observationIdentityContent(orderObservationContent(value)),
-  );
+  try {
+    const observation = parseOrderObservation(value);
+    return checkedSerialization(
+      (matchesExpectedLiteral(observation.schemaVersion, PORTFOLIO_ORDER_SCHEMA_VERSION_V1) ||
+        matchesExpectedLiteral(observation.schemaVersion, PORTFOLIO_ORDER_SCHEMA_VERSION)) &&
+        matchesExpectedLiteral(observation.provider, PORTFOLIO_PROVIDER) &&
+        matchesExpectedLiteral(observation.brokerEnvironment, PORTFOLIO_BROKER_ENVIRONMENT),
+      orderObservationContent(observation),
+      observation.orderObservationId,
+      'orderObservationId',
+      observationIdentityContent(orderObservationContent(observation)),
+    );
+  } catch (error) {
+    if (error instanceof PortfolioError && error.code === 'serialization_invalid') throw error;
+    return invalidSerialization(error);
+  }
 }
 
 export function serializePortfolioFillObservation(value: PortfolioFillObservation): string {
@@ -453,19 +485,56 @@ export function serializePortfolioFillObservation(value: PortfolioFillObservatio
 }
 
 export function serializePortfolioSyncSnapshot(value: PortfolioSyncSnapshot): string {
-  for (const item of value.positions) serializePortfolioPositionObservation(item);
-  for (const item of value.orders) serializePortfolioOrderObservation(item);
-  for (const item of value.fills) serializePortfolioFillObservation(item);
-  serializePortfolioAccountObservation(value.account);
-  return checkedSerialization(
-    matchesExpectedLiteral(value.schemaVersion, PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION) &&
-      matchesExpectedLiteral(value.provider, PORTFOLIO_PROVIDER) &&
-      matchesExpectedLiteral(value.brokerEnvironment, PORTFOLIO_BROKER_ENVIRONMENT) &&
-      matchesExpectedLiteral(value.markSource, PORTFOLIO_MARK_SOURCE),
-    syncSnapshotContent(value),
-    value.snapshotId,
-    'snapshotId',
-  );
+  try {
+    const schemaVersion = snapshotSchemaVersion(value.schemaVersion);
+    const expectedOrderSchemaVersion =
+      schemaVersion === PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1
+        ? PORTFOLIO_ORDER_SCHEMA_VERSION_V1
+        : PORTFOLIO_ORDER_SCHEMA_VERSION;
+    for (const item of value.positions) serializePortfolioPositionObservation(item);
+    for (const item of value.orders) {
+      if (item.schemaVersion !== expectedOrderSchemaVersion) invalidSerialization();
+      serializePortfolioOrderObservation(item);
+    }
+    for (const item of value.fills) serializePortfolioFillObservation(item);
+    serializePortfolioAccountObservation(value.account);
+    const snapshot = createPortfolioSyncSnapshotForSchema(
+      {
+        captureStartedAt: value.knowledgeInterval.captureStartedAt,
+        captureCompletedAt: value.knowledgeInterval.captureCompletedAt,
+        activityBaselineOnly: value.coverage.activityBaselineOnly,
+        activityWindowStartedAt: value.coverage.activityWindowStartedAt,
+        activityCutoverAt: value.coverage.activityCutoverAt,
+        positionsComplete: value.coverage.positionsComplete,
+        ordersComplete: value.coverage.ordersComplete,
+        fillsComplete: value.coverage.fillsComplete,
+        sourceRequestFingerprints: value.sourceRequestFingerprints,
+        account: value.account,
+        positions: value.positions,
+        orders: value.orders,
+        fills: value.fills,
+      },
+      schemaVersion,
+    );
+    if (
+      JSON.stringify(syncSnapshotContent(snapshot)) !== JSON.stringify(syncSnapshotContent(value))
+    ) {
+      invalidSerialization();
+    }
+    return checkedSerialization(
+      (matchesExpectedLiteral(schemaVersion, PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1) ||
+        matchesExpectedLiteral(schemaVersion, PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION)) &&
+        matchesExpectedLiteral(snapshot.provider, PORTFOLIO_PROVIDER) &&
+        matchesExpectedLiteral(snapshot.brokerEnvironment, PORTFOLIO_BROKER_ENVIRONMENT) &&
+        matchesExpectedLiteral(snapshot.markSource, PORTFOLIO_MARK_SOURCE),
+      syncSnapshotContent(snapshot),
+      value.snapshotId,
+      'snapshotId',
+    );
+  } catch (error) {
+    if (error instanceof PortfolioError && error.code === 'serialization_invalid') throw error;
+    return invalidSerialization(error);
+  }
 }
 
 /**
@@ -499,21 +568,24 @@ export function parsePortfolioSyncSnapshot(input: unknown): PortfolioSyncSnapsho
     const positions = exactArray(record.positions).map(parsePositionObservation);
     const orders = exactArray(record.orders).map(parseOrderObservation);
     const fills = exactArray(record.fills).map(parseFillObservation);
-    const snapshot = createPortfolioSyncSnapshot({
-      captureStartedAt: knowledgeInterval.captureStartedAt,
-      captureCompletedAt: knowledgeInterval.captureCompletedAt,
-      activityBaselineOnly: coverage.activityBaselineOnly,
-      activityWindowStartedAt: coverage.activityWindowStartedAt,
-      activityCutoverAt: coverage.activityCutoverAt,
-      positionsComplete: coverage.positionsComplete,
-      ordersComplete: coverage.ordersComplete,
-      fillsComplete: coverage.fillsComplete,
-      sourceRequestFingerprints,
-      account: parseAccountObservation(record.account),
-      positions,
-      orders,
-      fills,
-    });
+    const snapshot = createPortfolioSyncSnapshotForSchema(
+      {
+        captureStartedAt: knowledgeInterval.captureStartedAt,
+        captureCompletedAt: knowledgeInterval.captureCompletedAt,
+        activityBaselineOnly: coverage.activityBaselineOnly,
+        activityWindowStartedAt: coverage.activityWindowStartedAt,
+        activityCutoverAt: coverage.activityCutoverAt,
+        positionsComplete: coverage.positionsComplete,
+        ordersComplete: coverage.ordersComplete,
+        fillsComplete: coverage.fillsComplete,
+        sourceRequestFingerprints,
+        account: parseAccountObservation(record.account),
+        positions,
+        orders,
+        fills,
+      },
+      snapshotSchemaVersion(record.schemaVersion),
+    );
     assertStoredId(record.snapshotId, snapshot.snapshotId);
 
     const reconstructed = serializePortfolioSyncSnapshot(snapshot);

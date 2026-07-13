@@ -36,6 +36,15 @@ provider payloads do not belong in these contracts. Stored canonical snapshots
 can be parsed only by exact-shape, constructor-backed validation that rechecks
 all nested identities and byte-stable serialization.
 
+Explicit multi-leg parent orders may lack a singular symbol, asset class, or
+side. Those provider facts remain null with no inferred instrument and carry
+`unsupported_order_structure`; concrete child-leg identity remains intact.
+Nested containment supplies canonical `orderClass: mleg` even when a child
+reports simple or empty class, while an omitted child order type remains null.
+New snapshot/order observations use schema v2 for this structural model. The
+reader still validates and restores legacy v1 bytes and identities without
+allowing v2-only nullability or support reasons into legacy observations.
+
 ## Fill activity coverage
 
 Alpaca applies the activity `after` and `until` filters to activity creation

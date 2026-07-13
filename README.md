@@ -75,7 +75,7 @@ user-stories/              Phase stories and implementation notes
 
 The normal CI and fixture/replay paths do not require financial credentials or a provider connection. The portable fixture is synthetic and contains canonical normalized events plus its effective freshness threshold only—no raw provider frames, credentials, account identifiers, or market claims. Service replay uses a checksum-derived target session, a temporary isolated consumer group, and durable session-event links so repeated runs are idempotent without claiming an empty target.
 
-The implementation and recorded offline automated/static checks for P2-01 through P2-10 are complete. Two independent P2-11 demonstrations remain pending: `npm run verify:phase2` must complete the integrated Redis/TimescaleDB restart path on a healthy Docker Linux engine, and `npm run market-data:provider-smoke` must observe actual AAPL/SPY bars with valid credentials. Neither is implied by normal CI, and Phase 2 must not be reported as fully verified until both have run successfully.
+The implementation and recorded offline automated/static checks for P2-01 through P2-10 are complete. `npm run verify:phase2` has also completed the integrated Redis/TimescaleDB restart path on a healthy Docker Linux engine. One P2-11 demonstration remains pending: `npm run market-data:provider-smoke` must observe actual AAPL/SPY bars with valid credentials. That provider result is not implied by normal CI, and Phase 2 must not be reported as fully verified until it passes.
 
 ### Local services
 
@@ -287,7 +287,7 @@ Performance work should be driven by measurements. Correctness, reproducibility,
 - Add local PostgreSQL and Redis services.
 - Establish configuration, secrets, logging, metrics, and tracing conventions.
 
-### Phase 2: Market-data ingestion (implemented; external verification pending)
+### Phase 2: Market-data ingestion (implemented; provider verification pending)
 
 - Implement the credential-gated real-time paper-market feed connection; actual provider smoke remains pending.
 - Normalize provider events into application-owned schemas.
@@ -371,7 +371,7 @@ Strategy success is not measured only by profit and loss. Track latency, data ga
 
 ## Repository status
 
-Phases 1 and 2 establish the development and implemented market-data foundations. The slice defines exact application-owned events, controlled Alpaca IEX ingestion, bounded recovery, at-least-once delivery, durable canonical bars and audit history, deterministic portable replay, and terminal status. The default remains provider-disabled and execution-disabled. Both the P2-11 service/restart verification and credential-gated provider smoke must pass before the Phase 2 exit is reported as fully verified. Phase 3 is a planned docs-only backlog for the first deterministic signal and remains blocked on that exit; no Phase 3 runtime, persistence, or configuration exists yet. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
+Phases 1 and 2 establish the development and implemented market-data foundations. The slice defines exact application-owned events, controlled Alpaca IEX ingestion, bounded recovery, at-least-once delivery, durable canonical bars and audit history, deterministic portable replay, and terminal status. The default remains provider-disabled and execution-disabled. The P2-11 service/restart verification has passed; the credential-gated provider smoke must also observe both approved symbols before the Phase 2 exit is reported as fully verified. Phase 3 is a planned docs-only backlog for the first deterministic signal and remains blocked on that provider gate; no Phase 3 runtime, persistence, or configuration exists yet. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
 
 ## External documentation
 

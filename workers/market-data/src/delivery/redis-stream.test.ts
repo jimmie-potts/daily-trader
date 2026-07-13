@@ -4,6 +4,7 @@ import { MARKET_DATA_SCHEMA_VERSION } from '@daily-trader/market-data';
 
 import {
   MARKET_DATA_CONSUMER_GROUP,
+  MARKET_DATA_MAX_BATCH_SIZE,
   MARKET_DATA_STREAM,
   RedisDeliveryError,
   RedisMarketDataConsumer,
@@ -152,6 +153,45 @@ describe('Redis market-data entry parsing and consumption', () => {
       MARKET_DATA_CONSUMER_GROUP,
       '101-0',
     ]);
+  });
+
+  it('reads RESP3 map replies without weakening the single-stream contract', async () => {
+    const client = new FakeRedisClient();
+    client.isOpen = true;
+    client.responses.push({ [MARKET_DATA_STREAM]: [['101-0', fields()]] });
+    const consumer = new RedisMarketDataConsumer(client, 'worker-1');
+
+    await expect(consumer.readNew(25)).resolves.toEqual([
+      expect.objectContaining({ redisEntryId: '101-0', eventId: EVENT_ID }),
+    ]);
+    expect(client.commands).toEqual([
+      [
+        'XREADGROUP',
+        'GROUP',
+        MARKET_DATA_CONSUMER_GROUP,
+        'worker-1',
+        'COUNT',
+        String(MARKET_DATA_MAX_BATCH_SIZE),
+        'BLOCK',
+        '25',
+        'STREAMS',
+        MARKET_DATA_STREAM,
+        '>',
+      ],
+    ]);
+  });
+
+  it('continues to read RESP2 array replies and rejects extra RESP3 streams', async () => {
+    const client = new FakeRedisClient();
+    client.isOpen = true;
+    client.responses.push([[MARKET_DATA_STREAM, [['101-0', fields()]]]], {
+      [MARKET_DATA_STREAM]: [],
+      'daily-trader.market-data.unexpected': [],
+    });
+    const consumer = new RedisMarketDataConsumer(client, 'worker-1');
+
+    await expect(consumer.readNew(25)).resolves.toHaveLength(1);
+    await expect(consumer.readNew(25)).rejects.toEqual(new RedisDeliveryError('entry_malformed'));
   });
 
   it('does not acknowledge when durable handling fails', async () => {

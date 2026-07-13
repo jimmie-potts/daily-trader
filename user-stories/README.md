@@ -46,19 +46,19 @@ Phase 2 builds directly on Phase 1's strict workspaces, exact string values, inj
 
 ### Story Order
 
-| Story                                              | Outcome                                    | Depends on          | Notes                                                             | Status                       |
-| -------------------------------------------------- | ------------------------------------------ | ------------------- | ----------------------------------------------------------------- | ---------------------------- |
-| [P2-01](./phase-2-01-market-data-contracts.md)     | Versioned contracts and event semantics    | Phase 1             | [Implementation](./notes/phase-2-01-market-data-contracts.md)     | Complete                     |
-| [P2-02](./phase-2-02-safe-feed-configuration.md)   | Safe paper-feed configuration              | P2-01               | [Implementation](./notes/phase-2-02-safe-feed-configuration.md)   | Complete                     |
-| [P2-03](./phase-2-03-provider-adapter-contract.md) | Replaceable adapter and deterministic fake | P2-01               | [Implementation](./notes/phase-2-03-provider-adapter-contract.md) | Complete                     |
-| [P2-04](./phase-2-04-normalize-provider-bars.md)   | Lossless provider-bar normalization        | P2-01, P2-03        | [Implementation](./notes/phase-2-04-normalize-provider-bars.md)   | Complete                     |
-| [P2-05](./phase-2-05-connect-paper-feed.md)        | Authenticated AAPL/SPY subscription        | P2-02, P2-04        | [Implementation](./notes/phase-2-05-connect-paper-feed.md)        | Provider bars pending        |
-| [P2-06](./phase-2-06-stream-recovery.md)           | Bounded recovery and gap reporting         | P2-05               | [Implementation](./notes/phase-2-06-stream-recovery.md)           | Complete                     |
-| [P2-07](./phase-2-07-redis-event-delivery.md)      | At-least-once Redis delivery               | P2-01, P2-04, P2-06 | [Implementation](./notes/phase-2-07-redis-event-delivery.md)      | Service validation blocked   |
-| [P2-08](./phase-2-08-persist-market-data.md)       | Event ledger and one-minute bars           | P2-07               | [Implementation](./notes/phase-2-08-persist-market-data.md)       | Service validation blocked   |
-| [P2-09](./phase-2-09-record-and-replay.md)         | Deterministic session replay               | P2-08               | [Implementation](./notes/phase-2-09-record-and-replay.md)         | Service validation blocked   |
-| [P2-10](./phase-2-10-terminal-market-status.md)    | Latest bar prices and feed status          | P2-06, P2-08, P2-09 | [Implementation](./notes/phase-2-10-terminal-market-status.md)    | External validation blocked  |
-| [P2-11](./phase-2-11-phase-verification.md)        | Reproducible Phase 2 handoff               | P2-01 through P2-10 | [Implementation](./notes/phase-2-11-phase-verification.md)        | External validations pending |
+| Story                                              | Outcome                                    | Depends on          | Notes                                                             | Status                |
+| -------------------------------------------------- | ------------------------------------------ | ------------------- | ----------------------------------------------------------------- | --------------------- |
+| [P2-01](./phase-2-01-market-data-contracts.md)     | Versioned contracts and event semantics    | Phase 1             | [Implementation](./notes/phase-2-01-market-data-contracts.md)     | Complete              |
+| [P2-02](./phase-2-02-safe-feed-configuration.md)   | Safe paper-feed configuration              | P2-01               | [Implementation](./notes/phase-2-02-safe-feed-configuration.md)   | Complete              |
+| [P2-03](./phase-2-03-provider-adapter-contract.md) | Replaceable adapter and deterministic fake | P2-01               | [Implementation](./notes/phase-2-03-provider-adapter-contract.md) | Complete              |
+| [P2-04](./phase-2-04-normalize-provider-bars.md)   | Lossless provider-bar normalization        | P2-01, P2-03        | [Implementation](./notes/phase-2-04-normalize-provider-bars.md)   | Complete              |
+| [P2-05](./phase-2-05-connect-paper-feed.md)        | Authenticated AAPL/SPY subscription        | P2-02, P2-04        | [Implementation](./notes/phase-2-05-connect-paper-feed.md)        | Provider bars pending |
+| [P2-06](./phase-2-06-stream-recovery.md)           | Bounded recovery and gap reporting         | P2-05               | [Implementation](./notes/phase-2-06-stream-recovery.md)           | Complete              |
+| [P2-07](./phase-2-07-redis-event-delivery.md)      | At-least-once Redis delivery               | P2-01, P2-04, P2-06 | [Implementation](./notes/phase-2-07-redis-event-delivery.md)      | Complete              |
+| [P2-08](./phase-2-08-persist-market-data.md)       | Event ledger and one-minute bars           | P2-07               | [Implementation](./notes/phase-2-08-persist-market-data.md)       | Complete              |
+| [P2-09](./phase-2-09-record-and-replay.md)         | Deterministic session replay               | P2-08               | [Implementation](./notes/phase-2-09-record-and-replay.md)         | Complete              |
+| [P2-10](./phase-2-10-terminal-market-status.md)    | Latest bar prices and feed status          | P2-06, P2-08, P2-09 | [Implementation](./notes/phase-2-10-terminal-market-status.md)    | Provider bars pending |
+| [P2-11](./phase-2-11-phase-verification.md)        | Reproducible Phase 2 handoff               | P2-01 through P2-10 | [Implementation](./notes/phase-2-11-phase-verification.md)        | Provider bars pending |
 
 ### Definition of Done
 
@@ -66,7 +66,7 @@ Each story requires risk-based automated tests, secret-safe observability, updat
 
 ### Phase Exit Status
 
-The implementation restricts provider scope to AAPL/XNAS and SPY/ARCX one-minute bars, delivers normalized events idempotently through Redis, records durable audit history and canonical bars, applies bounded recovery, reports entitlement and freshness separately from transport health, and replays the verified portable session deterministically. P2-01 through P2-10 have implementation notes and pass their recorded offline automated and static checks. P2-11 remains short of the phase exit criterion for two independent reasons: Docker was unavailable for the integrated Redis/TimescaleDB restart demonstration, and the credential-gated Sunday provider run authenticated/subscribed successfully but emitted no AAPL/SPY bar before its inactivity deadline. Signals, portfolios, alerts, orders, execution, web-dashboard work, additional assets, and trade-to-bar aggregation remain out of scope.
+The implementation restricts provider scope to AAPL/XNAS and SPY/ARCX one-minute bars, delivers normalized events idempotently through Redis, records durable audit history and canonical bars, applies bounded recovery, reports entitlement and freshness separately from transport health, and replays the verified portable session deterministically. P2-01 through P2-10 have implementation notes and pass their recorded offline automated, static, and Docker-backed service/restart checks. P2-11 remains short of the phase exit criterion only because the credential-gated Sunday provider run authenticated/subscribed successfully but emitted no AAPL/SPY bar before its inactivity deadline. Signals, portfolios, alerts, orders, execution, web-dashboard work, additional assets, and trade-to-bar aggregation remain out of scope.
 
 ## Phase 3: First Deterministic Signal
 
@@ -82,7 +82,7 @@ The governing implementation order and the repository's first vertical slice pla
 
 Phase 2 supplies application-owned exact bar events, committed canonical AAPL/SPY bars, session/gap/freshness classifications, at-least-once Redis delivery, append-only audit history, injected clocks, and verified portable-recording interfaces. It deliberately supplies no decimal arithmetic, feature state, signal contract, canonical-bar-to-signal handoff, signal persistence, or signal presentation.
 
-The Phase 3 backlog may be reviewed while P2-11 is pending, but implementation must not begin and Phase 3 cannot exit until `npm run verify:phase2` passes on healthy Redis/TimescaleDB services and the credential-gated provider smoke observes normalized AAPL and SPY bars. A naturally occurring live signal is not required; provider validation proves the input boundary and synthetic replay proves signal behavior.
+The Phase 3 backlog may be reviewed while P2-11 is pending, but implementation must not begin and Phase 3 cannot exit until the credential-gated provider smoke observes normalized AAPL and SPY bars. `npm run verify:phase2` has passed on healthy Redis/TimescaleDB services. A naturally occurring live signal is not required; provider validation proves the input boundary and synthetic replay proves signal behavior.
 
 ### Story Order
 

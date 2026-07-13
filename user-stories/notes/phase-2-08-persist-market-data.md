@@ -1,6 +1,6 @@
 # P2-08 Implementation Note
 
-- Status: Implemented; integrated service validation blocked
+- Status: Complete
 - Implemented: 2026-07-12
 
 ## What Was Implemented
@@ -11,10 +11,10 @@
 
 ## Validation Evidence
 
-- Persistence passed with 2 files and 19 tests; the current full worker suite passed with 19 files and 144 tests.
+- Persistence passed with 2 files and 19 tests; the current full worker suite passed with 19 files and 146 tests.
 - Tests cover sessions, exact parameter values, accepted/duplicate/correction/out-of-order results, canonical precedence independent of arrival order, gaps, transaction commit/rollback, query and stored-data failures, latest-bar filtering, canonical ledger export, acknowledgement after commit, and safe error translation.
 - Worker type checking and production build passed. The migration SQL was rechecked for matching canonical insert columns and parameters, durable freshness metadata, session-event references, and market-series locking.
-- Docker-backed migration/service validation: **Not Run** because the Docker/WSL service boundary was unavailable (`UtilBindVsockAnyPort:307: socket failed 1`). This is recorded as unavailable, not passing, and remains part of P2-11 final verification.
+- Docker-backed migration/service validation: **Pass** — the verifier created an isolated database, applied migration `0001_market_data.sql`, persisted and replayed the six-event session through Redis, restarted both services, verified identical durable results, dropped the temporary database, removed its run-scoped Redis state, and stopped the containers without deleting named volumes.
 
 ## Handoff
 

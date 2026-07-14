@@ -30,6 +30,8 @@ vi.mock('./persistence/repository.js', () => ({
         lifecycle: 'degraded',
         failureCode: 'provider_transport',
         heartbeatAt: '2026-07-13T13:31:02.500Z',
+        leaseExpiresAt: '2026-07-13T13:31:12.500Z',
+        leaseState: 'expired',
         lastSyncStartedAt: '2026-07-13T13:31:00.000Z',
         lastSyncCompletedAt: '2026-07-13T13:30:00.000Z',
         currentSyncRunId: 'portfolio-sync-internal-only',
@@ -41,6 +43,8 @@ vi.mock('./persistence/repository.js', () => ({
         orderCount: 1,
         fillCount: 1,
         accountId: 'raw-account-must-not-escape',
+        ownerId: 'worker-owner-must-not-escape',
+        fenceToken: 'worker-fence-must-not-escape',
         apiSecret: 'secret-must-not-escape',
       });
     }
@@ -85,14 +89,19 @@ describe('portfolio status CLI', () => {
       executionEnabled: false,
       failureCode: 'provider_transport',
       fillCount: 1,
+      heartbeatAt: '2026-07-13T13:31:02.500Z',
       lastSyncCompletedAt: '2026-07-13T13:30:00.000Z',
       lastSyncStartedAt: '2026-07-13T13:31:00.000Z',
+      leaseExpiresAt: '2026-07-13T13:31:12.500Z',
+      leaseState: 'expired',
       lifecycle: 'degraded',
       orderCount: 1,
       positionCount: 2,
       projectionState: 'complete',
       reconciliationState: 'converged',
     });
-    expect(JSON.stringify(output)).not.toMatch(/account|apiSecret|internal-only|secret-must/u);
+    expect(JSON.stringify(output)).not.toMatch(
+      /account|apiSecret|fence|internal-only|owner|secret-must/u,
+    );
   });
 });

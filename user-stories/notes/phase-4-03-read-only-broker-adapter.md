@@ -11,8 +11,8 @@ The injected HTTP boundary sends credentials only to the approved HTTPS origin, 
 
 ## Validation Evidence
 
-- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** - 10 test files/67 tests; adapter, normalization, persistence, and HTTP tests verified exactly four GET operations, allowed paths and origin, pagination, strict page/item capacity, nested multi-leg parents and concrete child legs with omitted fields, exclusive created-at bounds and overlap, retries, response limits, redirects, cancellation, account mismatch, safe errors, and bounded shutdown.
-- Fixture verification passed through the production adapter and normalization boundary without a network connection or broker credential.
+- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** - 10 test files/71 tests; adapter, normalization, persistence, and HTTP tests verified exactly four GET operations, allowed paths and origin, pagination, strict page/item capacity, nested multi-leg parents and concrete child legs with omitted fields, exclusive created-at bounds and overlap, retries, response limits, redirects, cancellation, account mismatch, safe errors, bounded shutdown, and truthful lease status.
+- Populated fixture verification and an all-empty Alpaca adapter regression passed through the production adapter and normalization boundary without a network connection or broker credential. The empty case retained four page-zero request receipts, complete coverage, converged reconciliation, exact zero exposures, and unavailable concentration.
 - Production export review found no broker-write operation or generic HTTP capability.
 
 ## Handoff

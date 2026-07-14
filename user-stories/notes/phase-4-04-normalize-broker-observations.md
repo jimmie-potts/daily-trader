@@ -11,7 +11,7 @@ Normalized account evidence retains the required exact cash/equity and blocking 
 
 ## Validation Evidence
 
-- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** - 10 test files/67 tests covered populated and empty captures, fractions, shorts, null marks, unsupported asset/currency/venue, unknown symbols, malformed and number-typed financial values, timestamps, enums, duplicates, inconsistent order/fill quantities, held orders, explicit multi-leg parent and child omissions, ratio-realistic leg quantities, role-based aggregate-parent fill linkage, baseline/subsequent queries, exact-boundary transaction times, and created-at-versus-transaction-time divergence.
+- `npm test --workspace=@daily-trader/portfolio-worker`: **Pass** - 10 test files/71 tests covered populated and empty captures, fractions, shorts, null marks, unsupported asset/currency/venue, unknown symbols, malformed and number-typed financial values, timestamps, enums, duplicates, inconsistent order/fill quantities, held orders, explicit multi-leg parent and child omissions, ratio-realistic leg quantities, role-based aggregate-parent fill linkage, baseline/subsequent queries, exact-boundary transaction times, and created-at-versus-transaction-time divergence.
 - Repeated decoding and receipt-time changes produced stable canonical identities; malformed single items failed the complete capture.
 - Sanitized fixtures and safe-error review found no real account, position, order, fill, request, or credential identifier.
 

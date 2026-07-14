@@ -106,15 +106,15 @@ The Phase 3 recording and replay core is credential-free and separately versione
 
 ### Portfolio commands
 
-| Command                             | Purpose                                                                                           |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `npm run dev:portfolio`             | Run the dedicated worker; disabled mode opens neither PostgreSQL nor the broker.                  |
-| `npm run start:portfolio`           | Build and start the read-only paper portfolio worker.                                             |
-| `npm run portfolio:fixture:verify`  | Exercise sanitized account, position, order, and fill fixtures through production adapters.       |
-| `npm run portfolio:fixture:persist` | Persist one sanitized complete cycle into the explicitly configured local verification database.  |
-| `npm run portfolio:status`          | Render the selected complete snapshot and separate sync, reconciliation, and projection state.    |
-| `npm run portfolio:provider-smoke`  | Run the separately gated, four-resource GET-only Alpaca paper-account smoke.                      |
-| `npm run verify:phase4`             | Run credential-free quality, fixture, migration, persistence, API, dashboard, and restart checks. |
+| Command                             | Purpose                                                                                                                |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev:portfolio`             | Run the dedicated worker; disabled mode opens neither PostgreSQL nor the broker.                                       |
+| `npm run start:portfolio`           | Build and start the read-only paper portfolio worker.                                                                  |
+| `npm run portfolio:fixture:verify`  | Exercise sanitized account, position, order, and fill fixtures through production adapters.                            |
+| `npm run portfolio:fixture:persist` | Persist one sanitized complete cycle into the explicitly configured local verification database.                       |
+| `npm run portfolio:status`          | Render the selected complete snapshot and separate sync, reconciliation, and projection state.                         |
+| `npm run portfolio:provider-smoke`  | Run the separately gated, four-resource GET-only Alpaca paper-account smoke.                                           |
+| `npm run verify:phase4`             | Run credential-free quality, fixture, clean/seeded-upgrade migration, persistence, API, dashboard, and restart checks. |
 
 The worker promotes only a complete account/positions/orders/fills cycle. A partial, malformed, timed-out, account-mismatched, or fenced cycle remains failed evidence and cannot replace the prior current snapshot. Provider source identifiers are fingerprinted before entering application contracts; credentials, raw account IDs, request IDs, and complete provider payloads are not logged or returned by the API. Exact financial values remain strings through `big.js`, PostgreSQL `NUMERIC`, the API, and the dashboard.
 
@@ -416,7 +416,7 @@ Strategy success is not measured only by profit and loss. Track latency, data ga
 
 ## Repository status
 
-Phases 1 through 3 are complete. The Phase 2 credential-gated provider smoke observed both approved symbols, and Phase 3's credential-free CI, PostgreSQL migration/replay, service-restart, and live canonical-revision matrix passed. Phase 4's GET-only portfolio implementation and credential-free technical matrix also pass: 73 test files/957 tests, repeated clean migrations including nullable multi-leg order constraints, sanitized fixture persistence, projection-integrity reconciliation, versioned API/dashboard reads, an interrupted cycle across a real service restart, last-good pointer preservation, deterministic presentation, and bounded cleanup. P4-11 and the full Phase 4 exit remain open because the separately credential-gated portfolio provider smoke has not run. The defaults remain provider-disabled, signal-disabled, portfolio-disabled, and execution-disabled. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
+Phases 1 through 3 are complete. The Phase 2 credential-gated provider smoke observed both approved symbols, and Phase 3's credential-free CI, PostgreSQL migration/replay, service-restart, and live canonical-revision matrix passed. Phase 4's GET-only portfolio implementation and credential-free technical matrix also pass: 74 test files/991 tests, clean migrations plus a seeded Phase 3 upgrade through the nullable multi-leg order constraints, sanitized fixture persistence, projection-integrity reconciliation, versioned API/dashboard reads, an interrupted cycle across a real service restart, last-good pointer preservation, deterministic presentation, and bounded cleanup. P4-11 and the full Phase 4 exit remain open because the separately credential-gated portfolio provider smoke has not run. The defaults remain provider-disabled, signal-disabled, portfolio-disabled, and execution-disabled. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
 
 ## External documentation
 

@@ -74,6 +74,34 @@ const snapshot: PortfolioDashboardSnapshot = {
   },
 };
 
+const noSnapshot: PortfolioDashboardSnapshot = {
+  ...snapshot,
+  health: {
+    ...snapshot.health,
+    state: 'no_snapshot',
+    snapshotAsOf: null,
+    ageMilliseconds: null,
+    knowledgeStartAt: null,
+    knowledgeEndAt: null,
+    reconciliation: null,
+    change: null,
+    projection: null,
+    incompleteReason: null,
+  },
+  account: null,
+  metrics: null,
+  positions: [],
+  observedOrders: { count: 0, byStatus: {} },
+  observedFills: {
+    count: 0,
+    selectionBasis: 'provider_created_at',
+    createdAfterExclusive: null,
+    createdBeforeExclusive: null,
+    latestTransactionAt: null,
+    initialBaseline: null,
+  },
+};
+
 describe('portfolio dashboard loader', () => {
   it('keeps development and production presentation on loopback', () => {
     const manifest = JSON.parse(
@@ -112,6 +140,84 @@ describe('portfolio dashboard loader', () => {
     expect(Object.isFrozen(decoded?.positions)).toBe(true);
     expect(Object.isFrozen(decoded?.positions[0])).toBe(true);
     expect(Object.isFrozen(decoded?.observedOrders.byStatus)).toBe(true);
+  });
+
+  it('accepts an internally consistent no-snapshot state', () => {
+    expect(decodePortfolioDashboardSnapshot(noSnapshot)).toEqual(noSnapshot);
+  });
+
+  it.each([
+    ['an account', { ...noSnapshot, account: snapshot.account }],
+    ['metrics', { ...noSnapshot, metrics: snapshot.metrics }],
+    ['positions', { ...noSnapshot, positions: [position] }],
+    [
+      'a snapshot timestamp',
+      {
+        ...noSnapshot,
+        health: { ...noSnapshot.health, snapshotAsOf: snapshot.health.snapshotAsOf },
+      },
+    ],
+    ['a snapshot age', { ...noSnapshot, health: { ...noSnapshot.health, ageMilliseconds: 0 } }],
+    [
+      'a knowledge start',
+      {
+        ...noSnapshot,
+        health: { ...noSnapshot.health, knowledgeStartAt: snapshot.health.knowledgeStartAt },
+      },
+    ],
+    [
+      'a knowledge end',
+      {
+        ...noSnapshot,
+        health: { ...noSnapshot.health, knowledgeEndAt: snapshot.health.knowledgeEndAt },
+      },
+    ],
+    [
+      'reconciliation state',
+      { ...noSnapshot, health: { ...noSnapshot.health, reconciliation: 'converged' } },
+    ],
+    ['change state', { ...noSnapshot, health: { ...noSnapshot.health, change: 'baseline' } }],
+    [
+      'projection state',
+      { ...noSnapshot, health: { ...noSnapshot.health, projection: 'incomplete' } },
+    ],
+    [
+      'an incomplete reason',
+      {
+        ...noSnapshot,
+        health: { ...noSnapshot.health, incompleteReason: 'projection_unavailable' },
+      },
+    ],
+    ['observed orders', { ...noSnapshot, observedOrders: { count: 1, byStatus: { filled: 1 } } }],
+    [
+      'an empty observed-order status bucket',
+      { ...noSnapshot, observedOrders: { count: 0, byStatus: { filled: 0 } } },
+    ],
+    [
+      'observed fills',
+      {
+        ...noSnapshot,
+        observedFills: {
+          ...noSnapshot.observedFills,
+          count: 1,
+          latestTransactionAt: snapshot.observedFills.latestTransactionAt,
+        },
+      },
+    ],
+    [
+      'fill query coverage',
+      {
+        ...noSnapshot,
+        observedFills: {
+          ...noSnapshot.observedFills,
+          createdAfterExclusive: snapshot.observedFills.createdAfterExclusive,
+          createdBeforeExclusive: snapshot.observedFills.createdBeforeExclusive,
+          initialBaseline: true,
+        },
+      },
+    ],
+  ])('rejects a no-snapshot state carrying %s', (_case, value) => {
+    expect(decodePortfolioDashboardSnapshot(value)).toBeNull();
   });
 
   it('retains bounded rows that share a display symbol without inventing an identifier', () => {
@@ -160,6 +266,23 @@ describe('portfolio dashboard loader', () => {
     [
       'noncanonical metric value',
       { ...snapshot, metrics: { ...snapshot.metrics, grossExposure: '1.5e3' } },
+    ],
+    ['complete projection without metrics', { ...snapshot, metrics: null }],
+    [
+      'complete projection without unrealized profit and loss',
+      { ...snapshot, metrics: { ...snapshot.metrics, unrealizedProfitLoss: null } },
+    ],
+    [
+      'complete projection without gross exposure',
+      { ...snapshot, metrics: { ...snapshot.metrics, grossExposure: null } },
+    ],
+    [
+      'complete projection without net exposure',
+      { ...snapshot, metrics: { ...snapshot.metrics, netExposure: null } },
+    ],
+    [
+      'account and metric currency mismatch',
+      { ...snapshot, metrics: { ...snapshot.metrics, currency: 'EUR' } },
     ],
     [
       'unknown account key',

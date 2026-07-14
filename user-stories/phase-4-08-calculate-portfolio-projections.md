@@ -6,7 +6,7 @@ As a portfolio observer, I want exact profit-and-loss, allocation, concentration
 
 ## Acceptance Criteria
 
-- A pure versioned portfolio calculator consumes exactly one completed, reconciled cycle and uses only the arithmetic and valuation rules accepted in ADR 0014. It receives no raw provider object, database row, ambient clock, signal occurrence, or mutable current state.
+- A pure versioned portfolio calculator consumes one fully normalized complete snapshot and a converged projection-basis reconciliation using only the arithmetic and valuation rules accepted in ADR 0014. Its result identity participates in final reconciliation before the pending cycle may complete and promote atomically. It receives no raw provider object, database row, ambient clock, signal occurrence, or mutable current state.
 - The private portfolio arithmetic wrapper uses string-only `big.js` under the 48-significant-digit and 18-fractional-digit policy. Exact comparison, addition, subtraction, and absolute value never round. Overflow or policy violation suppresses the projection explicitly.
 - Broker marks and broker-reported signed position market values are the labeled valuation authority. The result binds the cycle knowledge interval and never presents a broker mark as an IEX, consolidated, exchange-timestamped, or independently real-time price.
 - A complete aggregate requires USD account values and only supported `us_equity` positions with valid non-null broker marks, signed market values, and unrealized profit-and-loss values. Unsupported asset/currency, null mark, missing value, invalid exact value, or unreconciled input keeps every holding visible but suppresses affected aggregate output rather than omitting it.

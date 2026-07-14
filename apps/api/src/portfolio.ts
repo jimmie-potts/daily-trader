@@ -8,7 +8,38 @@ export interface PortfolioQueryPort {
   query<Row extends Readonly<Record<string, unknown>>>(
     text: string,
     values?: readonly unknown[],
+    signal?: AbortSignal,
   ): Promise<PortfolioQueryResult<Row>>;
+}
+
+type ParallelPortfolioQueries<Result extends readonly unknown[]> = {
+  readonly [Index in keyof Result]: (signal: AbortSignal) => Promise<Result[Index]>;
+};
+
+async function runParallelPortfolioQueries<Result extends readonly unknown[]>(
+  requestSignal: AbortSignal | undefined,
+  queries: ParallelPortfolioQueries<Result>,
+): Promise<Result> {
+  const controller = new AbortController();
+  const abortFromRequest = (): void => controller.abort();
+  if (requestSignal?.aborted === true) {
+    controller.abort();
+  } else {
+    requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
+  }
+  const pending = queries.map((query) =>
+    Promise.resolve().then(async () => query(controller.signal)),
+  );
+
+  try {
+    return (await Promise.all(pending)) as unknown as Result;
+  } catch (error) {
+    controller.abort();
+    await Promise.allSettled(pending);
+    throw error;
+  } finally {
+    requestSignal?.removeEventListener('abort', abortFromRequest);
+  }
 }
 
 interface CurrentRow extends Readonly<Record<string, unknown>> {
@@ -675,9 +706,10 @@ function pageResponse<SchemaVersion extends string, Item>(input: {
 export class PortfolioApiRepository {
   public constructor(private readonly database: PortfolioQueryPort) {}
 
-  async #currentSelection(): Promise<CurrentSelectionRow> {
-    const selection = (await this.database.query<CurrentSelectionRow>(CURRENT_SELECTION_SQL))
-      .rows[0];
+  async #currentSelection(signal?: AbortSignal): Promise<CurrentSelectionRow> {
+    const selection = (
+      await this.database.query<CurrentSelectionRow>(CURRENT_SELECTION_SQL, undefined, signal)
+    ).rows[0];
     if (selection === undefined) throw new Error('portfolio worker status is unavailable');
     if (selection.sync_run_id !== null && selection.capture_completed_at === null) {
       throw new Error('selected portfolio snapshot is incomplete');
@@ -685,8 +717,11 @@ export class PortfolioApiRepository {
     return selection;
   }
 
-  public async readPositions(request: PortfolioApiPageRequest): Promise<PortfolioApiPositionsPage> {
-    const selection = await this.#currentSelection();
+  public async readPositions(
+    request: PortfolioApiPageRequest,
+    signal?: AbortSignal,
+  ): Promise<PortfolioApiPositionsPage> {
+    const selection = await this.#currentSelection(signal);
     if (selection.sync_run_id === null) {
       return pageResponse({
         schemaVersion: 'daily-trader.portfolio.positions-page.v1',
@@ -696,13 +731,15 @@ export class PortfolioApiRepository {
         items: [],
       });
     }
-    const [countResult, pageResult] = await Promise.all([
-      this.database.query<CountRow>(POSITION_COUNT_SQL, [selection.sync_run_id]),
-      this.database.query<PositionPageRow>(POSITION_PAGE_SQL, [
-        selection.sync_run_id,
-        request.limit,
-        request.offset,
-      ]),
+    const [countResult, pageResult] = await runParallelPortfolioQueries(signal, [
+      (querySignal) =>
+        this.database.query<CountRow>(POSITION_COUNT_SQL, [selection.sync_run_id], querySignal),
+      (querySignal) =>
+        this.database.query<PositionPageRow>(
+          POSITION_PAGE_SQL,
+          [selection.sync_run_id, request.limit, request.offset],
+          querySignal,
+        ),
     ]);
     const count = countResult.rows[0];
     if (count === undefined) throw new Error('portfolio position count is unavailable');
@@ -727,8 +764,11 @@ export class PortfolioApiRepository {
     });
   }
 
-  public async readOrders(request: PortfolioApiPageRequest): Promise<PortfolioApiOrdersPage> {
-    const selection = await this.#currentSelection();
+  public async readOrders(
+    request: PortfolioApiPageRequest,
+    signal?: AbortSignal,
+  ): Promise<PortfolioApiOrdersPage> {
+    const selection = await this.#currentSelection(signal);
     if (selection.sync_run_id === null) {
       return pageResponse({
         schemaVersion: 'daily-trader.portfolio.orders-page.v2',
@@ -738,13 +778,15 @@ export class PortfolioApiRepository {
         items: [],
       });
     }
-    const [countResult, pageResult] = await Promise.all([
-      this.database.query<CountRow>(ORDER_COUNT_SQL, [selection.sync_run_id]),
-      this.database.query<OrderPageRow>(ORDER_PAGE_SQL, [
-        selection.sync_run_id,
-        request.limit,
-        request.offset,
-      ]),
+    const [countResult, pageResult] = await runParallelPortfolioQueries(signal, [
+      (querySignal) =>
+        this.database.query<CountRow>(ORDER_COUNT_SQL, [selection.sync_run_id], querySignal),
+      (querySignal) =>
+        this.database.query<OrderPageRow>(
+          ORDER_PAGE_SQL,
+          [selection.sync_run_id, request.limit, request.offset],
+          querySignal,
+        ),
     ]);
     const count = countResult.rows[0];
     if (count === undefined) throw new Error('portfolio order count is unavailable');
@@ -792,8 +834,11 @@ export class PortfolioApiRepository {
     });
   }
 
-  public async readFills(request: PortfolioApiPageRequest): Promise<PortfolioApiFillsPage> {
-    const selection = await this.#currentSelection();
+  public async readFills(
+    request: PortfolioApiPageRequest,
+    signal?: AbortSignal,
+  ): Promise<PortfolioApiFillsPage> {
+    const selection = await this.#currentSelection(signal);
     if (selection.sync_run_id === null) {
       return pageResponse({
         schemaVersion: 'daily-trader.portfolio.fills-page.v1',
@@ -803,13 +848,15 @@ export class PortfolioApiRepository {
         items: [],
       });
     }
-    const [countResult, pageResult] = await Promise.all([
-      this.database.query<CountRow>(FILL_COUNT_SQL, [selection.sync_run_id]),
-      this.database.query<FillPageRow>(FILL_PAGE_SQL, [
-        selection.sync_run_id,
-        request.limit,
-        request.offset,
-      ]),
+    const [countResult, pageResult] = await runParallelPortfolioQueries(signal, [
+      (querySignal) =>
+        this.database.query<CountRow>(FILL_COUNT_SQL, [selection.sync_run_id], querySignal),
+      (querySignal) =>
+        this.database.query<FillPageRow>(
+          FILL_PAGE_SQL,
+          [selection.sync_run_id, request.limit, request.offset],
+          querySignal,
+        ),
     ]);
     const count = countResult.rows[0];
     if (count === undefined) throw new Error('portfolio fill count is unavailable');
@@ -836,8 +883,8 @@ export class PortfolioApiRepository {
     });
   }
 
-  public async read(): Promise<PortfolioApiRepositorySnapshot> {
-    const current = (await this.database.query<CurrentRow>(CURRENT_SQL)).rows[0];
+  public async read(signal?: AbortSignal): Promise<PortfolioApiRepositorySnapshot> {
+    const current = (await this.database.query<CurrentRow>(CURRENT_SQL, undefined, signal)).rows[0];
     if (current === undefined) throw new Error('portfolio worker status is unavailable');
     if (current.sync_run_id === null || current.account_fingerprint === null) {
       return Object.freeze({
@@ -848,10 +895,13 @@ export class PortfolioApiRepository {
       });
     }
 
-    const [positions, orderStatuses, fills] = await Promise.all([
-      this.database.query<PositionRow>(POSITIONS_SQL, [current.sync_run_id]),
-      this.database.query<OrderStatusRow>(ORDER_STATUS_SQL, [current.sync_run_id]),
-      this.database.query<FillSummaryRow>(FILL_SUMMARY_SQL, [current.sync_run_id]),
+    const [positions, orderStatuses, fills] = await runParallelPortfolioQueries(signal, [
+      (querySignal) =>
+        this.database.query<PositionRow>(POSITIONS_SQL, [current.sync_run_id], querySignal),
+      (querySignal) =>
+        this.database.query<OrderStatusRow>(ORDER_STATUS_SQL, [current.sync_run_id], querySignal),
+      (querySignal) =>
+        this.database.query<FillSummaryRow>(FILL_SUMMARY_SQL, [current.sync_run_id], querySignal),
     ]);
     const fillRow = fills.rows[0];
     if (fillRow === undefined) throw new Error('portfolio fill summary is unavailable');

@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 
 import { FixedClock, createUtcTimestamp } from '@daily-trader/domain';
+import {
+  preparePortfolioProjection,
+  projectPortfolioSnapshot,
+  reconcilePortfolioProjection,
+  type PortfolioRequestReceipt,
+} from '@daily-trader/portfolio';
 import { describe, expect, it } from 'vitest';
 
 import { DeterministicPortfolioSnapshotProvider } from '../fixture.js';
@@ -86,6 +92,93 @@ describe('AlpacaPaperPortfolioProvider', () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow('Fixture portfolio capture was cancelled');
+  });
+
+  it('retains complete four-resource evidence and a usable projection for an empty account', async () => {
+    const calls: { readonly init: AlpacaFetchInit; readonly url: URL }[] = [];
+    const receipts: PortfolioRequestReceipt[] = [];
+    const account = structuredClone(fixture('account')) as Record<string, unknown>;
+    Object.assign(account, {
+      cash: '100000.00',
+      equity: '100000.00',
+      last_equity: '100000.00',
+      portfolio_value: '100000.00',
+      long_market_value: '0',
+      short_market_value: '0',
+      initial_margin: '0',
+      maintenance_margin: '0',
+      last_maintenance_margin: '0',
+    });
+    const fetch: AlpacaFetch = (input, init) => {
+      const url = new URL(input);
+      calls.push({ init, url });
+      const payload = url.pathname === '/v2/account' ? account : [];
+      return Promise.resolve(response(payload, `empty-${url.pathname.replaceAll('/', '-')}`));
+    };
+
+    const snapshot = await provider(fetch).capture({
+      previousActivityCutoverAt: null,
+      captureAttempt: 3,
+      onRequestReceipt: (receipt) => {
+        receipts.push(receipt);
+        return Promise.resolve();
+      },
+    });
+
+    expect(calls).toHaveLength(4);
+    expect(calls.map(({ url }) => url.pathname).sort()).toEqual([
+      '/v2/account',
+      '/v2/account/activities/FILL',
+      '/v2/orders',
+      '/v2/positions',
+    ]);
+    expect(calls.map(({ init }) => init.method)).toEqual(['GET', 'GET', 'GET', 'GET']);
+    expect(receipts).toHaveLength(4);
+    expect(
+      receipts.map(({ captureAttempt, pageOrdinal, resource, responseStatus }) => ({
+        captureAttempt,
+        pageOrdinal,
+        resource,
+        responseStatus,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        { captureAttempt: 3, pageOrdinal: 0, resource: 'account', responseStatus: 200 },
+        { captureAttempt: 3, pageOrdinal: 0, resource: 'positions', responseStatus: 200 },
+        { captureAttempt: 3, pageOrdinal: 0, resource: 'orders', responseStatus: 200 },
+        { captureAttempt: 3, pageOrdinal: 0, resource: 'fills', responseStatus: 200 },
+      ]),
+    );
+    expect(snapshot).toMatchObject({
+      positions: [],
+      orders: [],
+      fills: [],
+      coverage: {
+        positionsComplete: true,
+        ordersComplete: true,
+        fillsComplete: true,
+      },
+    });
+    expect(new Set(snapshot.sourceRequestFingerprints)).toEqual(
+      new Set(receipts.map(({ requestFingerprint }) => requestFingerprint)),
+    );
+
+    const prepared = preparePortfolioProjection(snapshot, null);
+    const reconciliation = reconcilePortfolioProjection(snapshot, prepared, null);
+    const projection = projectPortfolioSnapshot(snapshot, reconciliation);
+    expect(reconciliation.status).toBe('converged');
+    expect(projection).toMatchObject({
+      state: 'complete',
+      positions: [],
+      metrics: {
+        totalUnrealizedProfitLoss: '0',
+        longExposure: '0',
+        shortExposure: '0',
+        grossExposure: '0',
+        netExposure: '0',
+        largestPositionConcentrationPercent: null,
+      },
+    });
   });
 
   it('fails before collection reads when the authenticated account is not expected', async () => {

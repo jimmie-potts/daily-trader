@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks';
+
 import type { ApplicationConfig } from '@daily-trader/config';
 import { getSafeConfigDiagnostics } from '@daily-trader/config';
 import { createUtcTimestamp, type Clock } from '@daily-trader/domain';
@@ -15,10 +17,20 @@ import {
 } from './portfolio.js';
 
 export interface PortfolioSnapshotReader {
-  read(): Promise<PortfolioApiRepositorySnapshot>;
-  readPositions(request: PortfolioApiPageRequest): Promise<PortfolioApiPositionsPage>;
-  readOrders(request: PortfolioApiPageRequest): Promise<PortfolioApiOrdersPage>;
-  readFills(request: PortfolioApiPageRequest): Promise<PortfolioApiFillsPage>;
+  read(signal: AbortSignal): Promise<PortfolioApiRepositorySnapshot>;
+  readPositions(
+    request: PortfolioApiPageRequest,
+    signal: AbortSignal,
+  ): Promise<PortfolioApiPositionsPage>;
+  readOrders(
+    request: PortfolioApiPageRequest,
+    signal: AbortSignal,
+  ): Promise<PortfolioApiOrdersPage>;
+  readFills(request: PortfolioApiPageRequest, signal: AbortSignal): Promise<PortfolioApiFillsPage>;
+}
+
+export interface ApiDurationClock {
+  now(): number;
 }
 
 export interface ApiDependencies {
@@ -26,6 +38,7 @@ export interface ApiDependencies {
   readonly logger: AppLogger;
   readonly meter: AppMeter;
   readonly clock?: Clock;
+  readonly durationClock?: ApiDurationClock;
   readonly portfolioReader?: PortfolioSnapshotReader;
 }
 
@@ -33,7 +46,62 @@ const systemClock: Clock = Object.freeze({
   now: () => createUtcTimestamp(new Date().toISOString()),
 });
 
+const systemDurationClock: ApiDurationClock = Object.freeze({
+  now: () => performance.now(),
+});
+
 type PortfolioResource = 'fills' | 'orders' | 'positions';
+type PortfolioRouteResource = PortfolioResource | 'summary';
+type PortfolioRouteOutcome =
+  'cancelled' | 'failed' | 'invalid_request' | 'succeeded' | 'unavailable';
+
+interface RequestCancellation {
+  readonly signal: AbortSignal;
+  dispose(): void;
+}
+
+function requestCancellation(request: FastifyRequest, reply: FastifyReply): RequestCancellation {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  const close = (): void => {
+    if (!reply.raw.writableEnded) abort();
+  };
+  request.raw.once('aborted', abort);
+  reply.raw.once('close', close);
+  if (request.raw.aborted || (reply.raw.destroyed && !reply.raw.writableEnded)) abort();
+  return Object.freeze({
+    signal: controller.signal,
+    dispose: (): void => {
+      request.raw.removeListener('aborted', abort);
+      reply.raw.removeListener('close', close);
+    },
+  });
+}
+
+function portfolioRequestCompletion(
+  dependencies: ApiDependencies,
+  resource: PortfolioRouteResource,
+): (outcome: PortfolioRouteOutcome) => void {
+  const clock = dependencies.durationClock ?? systemDurationClock;
+  const startedAt = clock.now();
+  return (outcome): void => {
+    const durationMilliseconds = Math.max(0, clock.now() - startedAt);
+    const attributes = { outcome, resource } as const;
+    dependencies.meter.addCounter(
+      'daily_trader.api.portfolio_requests',
+      1,
+      attributes,
+      'Read-only portfolio API requests by bounded route and outcome.',
+    );
+    dependencies.meter.recordHistogram(
+      'daily_trader.api.portfolio_request_duration',
+      durationMilliseconds,
+      'ms',
+      attributes,
+      'Read-only portfolio API request duration by bounded route and outcome.',
+    );
+  };
+}
 
 function unavailableResponse(): Readonly<Record<string, unknown>> {
   return Object.freeze({
@@ -82,36 +150,54 @@ export function buildApi(dependencies: ApiDependencies): FastifyInstance {
   });
 
   app.get('/v1/portfolio', async (request, reply) => {
+    const cancellation = requestCancellation(request, reply);
+    const completeRequest = portfolioRequestCompletion(dependencies, 'summary');
+    let outcome: PortfolioRouteOutcome = 'failed';
     void reply.header('cache-control', 'no-store');
-    const reader = dependencies.portfolioReader;
-    if (reader === undefined) {
-      dependencies.logger.warn('api.portfolio.unavailable', {
-        code: 'PORTFOLIO_REPOSITORY_UNAVAILABLE',
-        correlationId: request.id,
-      });
-      return reply.code(503).send(unavailableResponse());
-    }
-
     try {
-      return await withSpan('api.portfolio.read', async () => {
-        const snapshot = buildPortfolioApiSnapshot({
-          repository: await reader.read(),
-          clock: dependencies.clock ?? systemClock,
-          staleAfterMs: dependencies.config.portfolio.operational.staleAfterMs,
-        });
-        dependencies.logger.info('api.portfolio.read', {
+      const reader = dependencies.portfolioReader;
+      if (reader === undefined) {
+        outcome = 'unavailable';
+        dependencies.logger.warn('api.portfolio.unavailable', {
+          code: 'PORTFOLIO_REPOSITORY_UNAVAILABLE',
           correlationId: request.id,
-          healthState: snapshot.health.state,
-          positionCount: snapshot.positions.length,
         });
-        return snapshot;
-      });
-    } catch {
-      dependencies.logger.error('api.portfolio.failed', {
-        code: 'PORTFOLIO_READ_FAILED',
-        correlationId: request.id,
-      });
-      return reply.code(503).send(unavailableResponse());
+        return reply.code(503).send(unavailableResponse());
+      }
+
+      try {
+        return await withSpan('api.portfolio.read', async () => {
+          const snapshot = buildPortfolioApiSnapshot({
+            repository: await reader.read(cancellation.signal),
+            clock: dependencies.clock ?? systemClock,
+            staleAfterMs: dependencies.config.portfolio.operational.staleAfterMs,
+          });
+          dependencies.logger.info('api.portfolio.read', {
+            correlationId: request.id,
+            healthState: snapshot.health.state,
+            positionCount: snapshot.positions.length,
+          });
+          outcome = 'succeeded';
+          return snapshot;
+        });
+      } catch {
+        if (cancellation.signal.aborted) {
+          outcome = 'cancelled';
+          dependencies.logger.info('api.portfolio.cancelled', {
+            correlationId: request.id,
+          });
+          return reply.raw.destroyed ? undefined : reply.code(503).send(unavailableResponse());
+        }
+        outcome = 'failed';
+        dependencies.logger.error('api.portfolio.failed', {
+          code: 'PORTFOLIO_READ_FAILED',
+          correlationId: request.id,
+        });
+        return reply.code(503).send(unavailableResponse());
+      }
+    } finally {
+      cancellation.dispose();
+      completeRequest(outcome);
     }
   });
 
@@ -120,49 +206,69 @@ export function buildApi(dependencies: ApiDependencies): FastifyInstance {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<unknown> => {
+    const cancellation = requestCancellation(request, reply);
+    const completeRequest = portfolioRequestCompletion(dependencies, resource);
+    let outcome: PortfolioRouteOutcome = 'failed';
     void reply.header('cache-control', 'no-store');
-    const pageRequest = parsePortfolioApiPageRequest(request.query);
-    if (pageRequest === null) {
-      dependencies.logger.warn('api.portfolio.page.invalid', {
-        code: 'PORTFOLIO_PAGINATION_INVALID',
-        correlationId: request.id,
-        resource,
-      });
-      return reply.code(400).send(invalidRequestResponse());
-    }
-    const reader = dependencies.portfolioReader;
-    if (reader === undefined) {
-      dependencies.logger.warn('api.portfolio.page.unavailable', {
-        code: 'PORTFOLIO_REPOSITORY_UNAVAILABLE',
-        correlationId: request.id,
-        resource,
-      });
-      return reply.code(503).send(unavailableResponse());
-    }
-
     try {
-      return await withSpan(`api.portfolio.${resource}.read`, async () => {
-        const page =
-          resource === 'positions'
-            ? await reader.readPositions(pageRequest)
-            : resource === 'orders'
-              ? await reader.readOrders(pageRequest)
-              : await reader.readFills(pageRequest);
-        dependencies.logger.info('api.portfolio.page.read', {
+      const pageRequest = parsePortfolioApiPageRequest(request.query);
+      if (pageRequest === null) {
+        outcome = 'invalid_request';
+        dependencies.logger.warn('api.portfolio.page.invalid', {
+          code: 'PORTFOLIO_PAGINATION_INVALID',
           correlationId: request.id,
           resource,
-          returned: page.pagination.returned,
-          total: page.pagination.total,
         });
-        return page;
-      });
-    } catch {
-      dependencies.logger.error('api.portfolio.page.failed', {
-        code: 'PORTFOLIO_PAGE_READ_FAILED',
-        correlationId: request.id,
-        resource,
-      });
-      return reply.code(503).send(unavailableResponse());
+        return reply.code(400).send(invalidRequestResponse());
+      }
+      const reader = dependencies.portfolioReader;
+      if (reader === undefined) {
+        outcome = 'unavailable';
+        dependencies.logger.warn('api.portfolio.page.unavailable', {
+          code: 'PORTFOLIO_REPOSITORY_UNAVAILABLE',
+          correlationId: request.id,
+          resource,
+        });
+        return reply.code(503).send(unavailableResponse());
+      }
+
+      try {
+        return await withSpan(`api.portfolio.${resource}.read`, async () => {
+          const page =
+            resource === 'positions'
+              ? await reader.readPositions(pageRequest, cancellation.signal)
+              : resource === 'orders'
+                ? await reader.readOrders(pageRequest, cancellation.signal)
+                : await reader.readFills(pageRequest, cancellation.signal);
+          dependencies.logger.info('api.portfolio.page.read', {
+            correlationId: request.id,
+            resource,
+            returned: page.pagination.returned,
+            total: page.pagination.total,
+          });
+          outcome = 'succeeded';
+          return page;
+        });
+      } catch {
+        if (cancellation.signal.aborted) {
+          outcome = 'cancelled';
+          dependencies.logger.info('api.portfolio.page.cancelled', {
+            correlationId: request.id,
+            resource,
+          });
+          return reply.raw.destroyed ? undefined : reply.code(503).send(unavailableResponse());
+        }
+        outcome = 'failed';
+        dependencies.logger.error('api.portfolio.page.failed', {
+          code: 'PORTFOLIO_PAGE_READ_FAILED',
+          correlationId: request.id,
+          resource,
+        });
+        return reply.code(503).send(unavailableResponse());
+      }
+    } finally {
+      cancellation.dispose();
+      completeRequest(outcome);
     }
   };
 

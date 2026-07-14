@@ -12,7 +12,7 @@ Checksum-protected migration `0004_portfolio_monitoring.sql` adds portfolio sync
 ## Validation Evidence
 
 - Portfolio repository tests passed for fenced leases, database-clock expiry, a nonlocking candidate check followed by final locked promotion revalidation, request idempotency, exact writes, complete atomic promotion, partial receipt rejection, rollback, failed-candidate retention, and tampered persisted observation revision.
-- A clean disposable PostgreSQL database applied migrations 0001-0005 and verified repeated migration checksums. Its rollback-only multi-leg constraint matrix accepted nullable and fully populated v2 parent/child shapes in a pending cycle while rejecting nullable or specially classified v1 rows and non-mleg misuse of `unsupported_order_structure` before the default synchronized fixture was read back.
+- A clean disposable PostgreSQL database applied migrations 0001-0005 and verified repeated migration checksums. A second disposable database applied 0001-0003, retained seeded completed signal-worker state while the normal runner upgraded through 0004/0005 twice, and exposed the new portfolio schema without altering the seed. The rollback-only multi-leg constraint matrix accepted nullable and fully populated v2 parent/child shapes in a pending cycle while rejecting nullable or specially classified v1 rows and non-mleg misuse of `unsupported_order_structure` before the default synchronized fixture was read back.
 - A direct constraint check confirmed the bounded baseline query, suppressed aggregate state, persisted counts, and converged reconciliation; the disposable database was then removed without changing named service volumes.
 
 ## Handoff

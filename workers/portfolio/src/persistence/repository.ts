@@ -56,10 +56,14 @@ export interface CurrentPortfolioSnapshot {
   readonly snapshot: PortfolioSyncSnapshot;
 }
 
+export type PortfolioWorkerLeaseState = 'current' | 'expired' | 'invalid' | 'not_held';
+
 export interface PortfolioRepositoryStatus {
   readonly lifecycle: string;
   readonly failureCode: string | null;
   readonly heartbeatAt: string;
+  readonly leaseExpiresAt: string | null;
+  readonly leaseState: PortfolioWorkerLeaseState;
   readonly lastSyncStartedAt: string | null;
   readonly lastSyncCompletedAt: string | null;
   readonly currentSyncRunId: string | null;
@@ -151,6 +155,13 @@ function text(value: unknown, field: string): string {
 
 function nullableText(value: unknown, field: string): string | null {
   return value === null ? null : text(value, field);
+}
+
+function workerLeaseState(value: unknown): PortfolioWorkerLeaseState {
+  if (value === 'current' || value === 'expired' || value === 'invalid' || value === 'not_held') {
+    return value;
+  }
+  throw new PortfolioWorkerError('database_unavailable', 'Invalid lease_state', true);
 }
 
 function fingerprint(value: unknown, field: string): PortfolioFingerprint {
@@ -932,8 +943,18 @@ export class PortfolioRepository {
 
   public async readStatus(): Promise<PortfolioRepositoryStatus> {
     const result = await this.#pool.query<SqlRow>(
-      `SELECT worker.lifecycle, worker.failure_code,
-              worker.heartbeat_at::text, worker.last_sync_started_at::text,
+      `WITH database_clock AS MATERIALIZED (
+         SELECT clock_timestamp() AS observed_at
+       )
+       SELECT worker.lifecycle, worker.failure_code,
+              worker.heartbeat_at::text, worker.lease_expires_at::text,
+              CASE
+                WHEN worker.lease_expires_at IS NULL THEN 'not_held'
+                WHEN worker.heartbeat_at > database_clock.observed_at THEN 'invalid'
+                WHEN worker.lease_expires_at <= database_clock.observed_at THEN 'expired'
+                ELSE 'current'
+              END AS lease_state,
+              worker.last_sync_started_at::text,
               worker.last_sync_completed_at::text,
               current.sync_run_id,
               run.capture_completed_at::text AS current_snapshot_at,
@@ -947,16 +968,28 @@ export class PortfolioRepository {
          LEFT JOIN portfolio_projections AS projection ON projection.sync_run_id = current.sync_run_id
          LEFT JOIN portfolio_reconciliations AS reconciliation
            ON reconciliation.sync_run_id = current.sync_run_id
+        CROSS JOIN database_clock
         WHERE worker.singleton`,
     );
     const row = result.rows[0];
     if (row === undefined) {
       throw new PortfolioWorkerError('database_unavailable', 'Portfolio status unavailable', true);
     }
+    const leaseExpiresAt = nullableText(row.lease_expires_at, 'lease_expires_at');
+    const leaseState = workerLeaseState(row.lease_state);
+    if ((leaseExpiresAt === null) !== (leaseState === 'not_held')) {
+      throw new PortfolioWorkerError(
+        'database_unavailable',
+        'Portfolio lease status is inconsistent',
+        true,
+      );
+    }
     const status = Object.freeze({
       lifecycle: text(row.lifecycle, 'lifecycle'),
       failureCode: nullableText(row.failure_code, 'failure_code'),
       heartbeatAt: text(row.heartbeat_at, 'heartbeat_at'),
+      leaseExpiresAt,
+      leaseState,
       lastSyncStartedAt: nullableText(row.last_sync_started_at, 'last_sync_started_at'),
       lastSyncCompletedAt: nullableText(row.last_sync_completed_at, 'last_sync_completed_at'),
       currentSyncRunId: nullableText(row.sync_run_id, 'sync_run_id'),

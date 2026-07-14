@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import pg from 'pg';
 
@@ -11,6 +13,12 @@ const defaultRedisUrl = 'redis://127.0.0.1:6379';
 const orphanLeaseMilliseconds = 5_000;
 const leaseExpiryPollMilliseconds = 100;
 const leaseExpiryDeadlineMilliseconds = 15_000;
+const migrationsDirectory = path.resolve('infrastructure/postgres/migrations');
+const phase3MigrationNames = Object.freeze([
+  '0001_market_data.sql',
+  '0002_signals.sql',
+  '0003_signal_writer_fencing.sql',
+]);
 
 try {
   process.loadEnvFile('.env');
@@ -78,6 +86,137 @@ async function withClient(databaseUrl, applicationName, operation) {
 
 function safeFingerprint(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+async function prepareSeededPhase3Database(databaseUrl) {
+  const migrations = await Promise.all(
+    phase3MigrationNames.map(async (name) => {
+      const sql = await readFile(path.join(migrationsDirectory, name), 'utf8');
+      return Object.freeze({ checksum: safeFingerprint(sql), name, sql });
+    }),
+  );
+
+  await withClient(databaseUrl, 'daily-trader-phase4-verification-upgrade-seed', async (client) => {
+    await client.query(`
+      CREATE TABLE daily_trader_schema_migrations (
+        migration_name text PRIMARY KEY,
+        checksum character(64) NOT NULL,
+        applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (checksum ~ '^[0-9a-f]{64}$')
+      )
+    `);
+
+    for (const migration of migrations) {
+      await client.query('BEGIN');
+      try {
+        await client.query(migration.sql);
+        await client.query(
+          'INSERT INTO daily_trader_schema_migrations (migration_name, checksum) VALUES ($1, $2)',
+          [migration.name, migration.checksum],
+        );
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    }
+
+    await client.query(
+      `INSERT INTO signal_runs (
+         run_id, source_kind, state, definition_version, configuration_version,
+         configuration_hash, configuration_payload, operational_configuration_hash,
+         operational_configuration_payload, backlog_limit, arithmetic_policy_version,
+         calendar_version, market_event_schema_version, data_quality_policy_version,
+         revision_schema_version, feature_schema_version, evaluation_schema_version,
+         freshness_threshold_ms, lookback_window, volume_multiplier, source_provenance,
+         source_cursor_namespace, start_position, stop_position, cursor_position,
+         capture_active, claim_fence, claim_lease_ms, claim_renew_interval_ms,
+         started_at, ended_at
+       ) VALUES (
+         'phase4-upgrade-seed', 'live_journal', 'completed',
+         'breakout_plus_volume.v1', 'daily-trader.signals.config.v1',
+         $1, '{"seed":"phase3-upgrade"}', $2, '{"seed":"phase3-operational"}',
+         10000, 'daily-trader.signals.arithmetic.bigjs.v1',
+         'nyse-core-2026-2028.v1', 'daily-trader.market-data.one-minute-bar.v1',
+         'daily-trader.market-data.quality.v1',
+         'daily-trader.market-data.canonical-revision.v1',
+         'daily-trader.signals.feature-result.v1',
+         'daily-trader.signals.evaluation.v1', 90000, 20, 2,
+         'phase4 seeded upgrade verification', 'phase4-upgrade-seed',
+         0, 0, 0, false, 0, 30000, 10000,
+         '2026-07-13T13:00:00.000Z', '2026-07-13T13:01:00.000Z'
+       )`,
+      [safeFingerprint('phase4-upgrade-config'), safeFingerprint('phase4-upgrade-operational')],
+    );
+    await client.query(
+      `UPDATE signal_worker_status
+          SET lifecycle = 'stopped',
+              heartbeat_at = '2026-07-13T13:01:00.000Z',
+              last_progress_position = 0,
+              backlog_count = 7,
+              updated_at = '2026-07-13T13:01:00.000Z'
+        WHERE singleton`,
+    );
+  });
+}
+
+async function verifySeededPhase3Upgrade(databaseUrl) {
+  await withClient(
+    databaseUrl,
+    'daily-trader-phase4-verification-upgrade-check',
+    async (client) => {
+      const migrations = await client.query(
+        'SELECT migration_name FROM daily_trader_schema_migrations ORDER BY migration_name',
+      );
+      const run = await client.query(
+        `SELECT state, source_kind, cursor_position::text AS cursor_position,
+                ended_at::text AS ended_at
+           FROM signal_runs
+          WHERE run_id = 'phase4-upgrade-seed'`,
+      );
+      const worker = await client.query(
+        `SELECT lifecycle, last_progress_position::text AS last_progress_position,
+                backlog_count::text AS backlog_count
+           FROM signal_worker_status
+          WHERE singleton`,
+      );
+      const portfolioTable = await client.query(
+        `SELECT to_regclass('public.portfolio_sync_runs')::text AS table_name`,
+      );
+      const migrationNames = migrations.rows.map(({ migration_name: name }) => name);
+      const seededRun = run.rows[0];
+      const seededWorker = worker.rows[0];
+      if (
+        JSON.stringify(migrationNames) !==
+          JSON.stringify([
+            ...phase3MigrationNames,
+            '0004_portfolio_monitoring.sql',
+            '0005_portfolio_mleg_orders.sql',
+          ]) ||
+        run.rows.length !== 1 ||
+        seededRun?.state !== 'completed' ||
+        seededRun?.source_kind !== 'live_journal' ||
+        seededRun?.cursor_position !== '0' ||
+        typeof seededRun?.ended_at !== 'string' ||
+        worker.rows.length !== 1 ||
+        seededWorker?.lifecycle !== 'stopped' ||
+        seededWorker?.last_progress_position !== '0' ||
+        seededWorker?.backlog_count !== '7' ||
+        portfolioTable.rows[0]?.table_name !== 'portfolio_sync_runs'
+      ) {
+        throw new Error('The seeded Phase 3 database did not upgrade to Phase 4 intact');
+      }
+    },
+  );
+
+  process.stdout.write(
+    `${JSON.stringify({
+      event: 'phase4.seeded_phase3_upgrade.verified',
+      migrations: 5,
+      seededSignalStatePreserved: true,
+      status: 'passed',
+    })}\n`,
+  );
 }
 
 async function verifyMlegOrderConstraints(databaseUrl) {
@@ -936,8 +1075,11 @@ const sanitizedEnvironment = {
 };
 const token = `${String(process.pid)}_${String(Date.now())}`;
 const databaseName = `daily_trader_p4_verify_${token}`;
+const upgradeDatabaseName = `daily_trader_p4_upgrade_${token}`;
 const verificationDatabaseUrl = new URL(baseDatabaseUrl);
 verificationDatabaseUrl.pathname = `/${databaseName}`;
+const upgradeDatabaseUrl = new URL(baseDatabaseUrl);
+upgradeDatabaseUrl.pathname = `/${upgradeDatabaseName}`;
 verificationRedisUrl = new URL(verificationRedisUrl);
 verificationRedisUrl.pathname = '/13';
 
@@ -966,6 +1108,7 @@ const childEnvironment = {
 let servicesAttempted = false;
 let servicesRunning = false;
 let databaseCreateAttempted = false;
+let upgradeDatabaseCreateAttempted = false;
 let failed = false;
 let activeStep = 'startup';
 let initialApiSnapshotChecksum;
@@ -986,13 +1129,27 @@ try {
 
   activeStep = 'database_create';
   databaseCreateAttempted = true;
+  upgradeDatabaseCreateAttempted = true;
   await withClient(
     baseDatabaseUrl.toString(),
     'daily-trader-phase4-verification-admin',
     async (client) => {
       await client.query(`CREATE DATABASE ${quotedIdentifier(databaseName)} TEMPLATE template0`);
+      await client.query(
+        `CREATE DATABASE ${quotedIdentifier(upgradeDatabaseName)} TEMPLATE template0`,
+      );
     },
   );
+
+  activeStep = 'seeded_phase3_upgrade';
+  const upgradeEnvironment = {
+    ...childEnvironment,
+    DATABASE_URL: upgradeDatabaseUrl.toString(),
+  };
+  await prepareSeededPhase3Database(upgradeDatabaseUrl.toString());
+  runScript('db:migrate', upgradeEnvironment);
+  runScript('db:migrate', upgradeEnvironment);
+  await verifySeededPhase3Upgrade(upgradeDatabaseUrl.toString());
 
   activeStep = 'migration';
   runScript('db:migrate', childEnvironment);
@@ -1065,7 +1222,7 @@ try {
     `${JSON.stringify({ event: 'phase4.verification.failed', step: activeStep })}\n`,
   );
 } finally {
-  if (databaseCreateAttempted) {
+  if (databaseCreateAttempted || upgradeDatabaseCreateAttempted) {
     if (!servicesRunning) {
       try {
         runScript('services:up');
@@ -1080,9 +1237,16 @@ try {
           baseDatabaseUrl.toString(),
           'daily-trader-phase4-verification-cleanup',
           async (client) => {
-            await client.query(
-              `DROP DATABASE IF EXISTS ${quotedIdentifier(databaseName)} WITH (FORCE)`,
-            );
+            if (databaseCreateAttempted) {
+              await client.query(
+                `DROP DATABASE IF EXISTS ${quotedIdentifier(databaseName)} WITH (FORCE)`,
+              );
+            }
+            if (upgradeDatabaseCreateAttempted) {
+              await client.query(
+                `DROP DATABASE IF EXISTS ${quotedIdentifier(upgradeDatabaseName)} WITH (FORCE)`,
+              );
+            }
           },
         );
       } catch {

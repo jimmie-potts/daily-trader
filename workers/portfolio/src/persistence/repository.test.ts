@@ -343,7 +343,7 @@ class DeterministicSqlPool implements SqlPool {
             );
           })();
     }
-    if (sql.startsWith('SELECT worker.lifecycle')) {
+    if (sql.includes('SELECT worker.lifecycle')) {
       return this.statusRow === null
         ? queryResult<Row>([], 0)
         : queryResult<Row>([this.statusRow], 1);
@@ -923,6 +923,8 @@ describe('PortfolioRepository status', () => {
       lifecycle: 'degraded',
       failure_code: 'provider_transport',
       heartbeat_at: '2026-07-13 13:31:02.5+00',
+      lease_expires_at: '2026-07-13 13:32:02.5+00',
+      lease_state: 'current',
       last_sync_started_at: '2026-07-13 13:31:00+00',
       last_sync_completed_at: '2026-07-13 13:30:00+00',
       sync_run_id: 'portfolio-sync-current',
@@ -943,6 +945,8 @@ describe('PortfolioRepository status', () => {
       lifecycle: 'degraded',
       failureCode: 'provider_transport',
       heartbeatAt: '2026-07-13 13:31:02.5+00',
+      leaseExpiresAt: '2026-07-13 13:32:02.5+00',
+      leaseState: 'current',
       lastSyncStartedAt: '2026-07-13 13:31:00+00',
       lastSyncCompletedAt: '2026-07-13 13:30:00+00',
       currentSyncRunId: 'portfolio-sync-current',
@@ -955,5 +959,42 @@ describe('PortfolioRepository status', () => {
       fillCount: 1,
     });
     expect(JSON.stringify(status)).not.toMatch(/raw-account|api_secret|secret-must/u);
+    const query = pool.calls.find(({ text }) => text.includes('END AS lease_state'))?.text;
+    expect(query).toContain('WITH database_clock AS MATERIALIZED');
+    expect(query).toContain('SELECT clock_timestamp() AS observed_at');
+    expect(query).toContain("worker.lease_expires_at IS NULL THEN 'not_held'");
+    expect(query).toContain("worker.heartbeat_at > database_clock.observed_at THEN 'invalid'");
+    expect(query).toContain("worker.lease_expires_at <= database_clock.observed_at THEN 'expired'");
+    expect(query).not.toMatch(/owner_id|account_fingerprint|fence_token/u);
+  });
+
+  it.each([
+    ['not_held', null],
+    ['expired', '2026-07-13 13:30:02.5+00'],
+    ['invalid', '2026-07-13 13:32:02.5+00'],
+  ] as const)('returns the bounded %s lease classification', async (leaseState, leaseExpiresAt) => {
+    const pool = new DeterministicSqlPool();
+    pool.statusRow = {
+      lifecycle: 'stopped',
+      failure_code: null,
+      heartbeat_at: '2026-07-13 13:31:02.5+00',
+      lease_expires_at: leaseExpiresAt,
+      lease_state: leaseState,
+      last_sync_started_at: null,
+      last_sync_completed_at: null,
+      sync_run_id: null,
+      current_snapshot_at: null,
+      projection_state: null,
+      reconciliation_state: null,
+      change_state: null,
+      position_count: null,
+      order_count: null,
+      fill_count: null,
+    };
+
+    const status = await new PortfolioRepository(pool, config()).readStatus();
+
+    expect(status.leaseExpiresAt).toBe(leaseExpiresAt);
+    expect(status.leaseState).toBe(leaseState);
   });
 });

@@ -10,6 +10,7 @@ import {
 interface QueryCall {
   readonly text: string;
   readonly values: readonly unknown[] | undefined;
+  readonly signal: AbortSignal | undefined;
 }
 
 class FakeQueryPort implements PortfolioQueryPort {
@@ -25,8 +26,9 @@ class FakeQueryPort implements PortfolioQueryPort {
   public query<Row extends Readonly<Record<string, unknown>>>(
     text: string,
     values?: readonly unknown[],
+    signal?: AbortSignal,
   ): Promise<PortfolioQueryResult<Row>> {
-    this.calls.push({ text, values });
+    this.calls.push({ text, values, signal });
     return Promise.resolve({ rows: this.respond(text, values) as readonly Row[] });
   }
 }
@@ -111,6 +113,61 @@ describe('portfolio API pagination contract', () => {
     ]) {
       expect(parsePortfolioApiPageRequest(input)).toBeNull();
     }
+  });
+
+  it('links request cancellation through selection and sibling-cancellable page reads', async () => {
+    const database = pageDatabase({
+      countTable: 'portfolio_order_observations',
+      pageTable: 'portfolio_order_observations AS observed_order',
+      total: '3',
+      rows: [mlegParentOrderRow()],
+    });
+    const controller = new AbortController();
+
+    await new PortfolioApiRepository(database).readOrders(
+      { limit: 1, offset: 0 },
+      controller.signal,
+    );
+
+    expect(database.calls).toHaveLength(3);
+    expect(database.calls[0]?.signal).toBe(controller.signal);
+    expect(database.calls[1]?.signal).toBe(database.calls[2]?.signal);
+    expect(database.calls[1]?.signal).not.toBe(controller.signal);
+  });
+
+  it('cancels and settles a sibling page read when its parallel count read fails', async () => {
+    let pageReadCancelled = false;
+    const parallelSignals: AbortSignal[] = [];
+    const database: PortfolioQueryPort = {
+      query: <Row extends Readonly<Record<string, unknown>>>(
+        text: string,
+        _values?: readonly unknown[],
+        signal?: AbortSignal,
+      ): Promise<PortfolioQueryResult<Row>> => {
+        if (text.includes('FROM portfolio_worker_status AS worker')) {
+          return Promise.resolve({ rows: [SELECTION] as unknown as readonly Row[] });
+        }
+        if (signal === undefined) throw new Error('parallel query signal is unavailable');
+        parallelSignals.push(signal);
+        if (text.includes('COUNT(*)')) return Promise.reject(new Error('count read failed'));
+        return new Promise((_resolve, reject) => {
+          const cancel = (): void => {
+            pageReadCancelled = true;
+            reject(new Error('page read cancelled'));
+          };
+          if (signal.aborted) cancel();
+          else signal.addEventListener('abort', cancel, { once: true });
+        });
+      },
+    };
+
+    await expect(
+      new PortfolioApiRepository(database).readOrders({ limit: 1, offset: 0 }),
+    ).rejects.toThrow('count read failed');
+
+    expect(parallelSignals).toHaveLength(2);
+    expect(parallelSignals[0]).toBe(parallelSignals[1]);
+    expect(pageReadCancelled).toBe(true);
   });
 
   it('returns stable bounded positions with exact values and no internal identifiers', async () => {

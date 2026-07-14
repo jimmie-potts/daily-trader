@@ -17,4 +17,4 @@ All financial values remain canonical decimal strings with application-owned cur
 
 ## Handoff
 
-Later portfolio work may depend on these application-owned contracts and accepted meanings. It must preserve the bounded open provider-created query claim without upgrading it to transaction-time completeness, full-account visibility, observation-only order/fill semantics, exact-value boundaries, and narrow reconciliation meaning. Any change to those semantics requires a version change and an accepted ADR.
+Later portfolio work may depend on these application-owned contracts and accepted meanings. It must preserve the bounded open provider-created query claim without upgrading it to transaction-time completeness or full-account history. It must also preserve observation-only order/fill semantics, exact-value boundaries, and the narrow reconciliation meaning. Any change to those semantics requires a version change and an accepted ADR.

@@ -1,5 +1,6 @@
 import {
   PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION,
+  PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1,
   accountObservationContent,
   fillObservationContent,
   observationIdentityContent,
@@ -446,8 +447,10 @@ export function reconcilePortfolioProjection(
   expectedPortfolioResultId: PortfolioFingerprint | null = null,
 ): PortfolioReconciliation {
   const expectedResult = optionalFingerprint(expectedPortfolioResultId);
+  const snapshotSchemaVersion = runtimeSchemaVersion(snapshot);
   if (
-    runtimeSchemaVersion(snapshot) !== PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION ||
+    (snapshotSchemaVersion !== PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1 &&
+      snapshotSchemaVersion !== PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION) ||
     !snapshot.coverage.positionsComplete ||
     !snapshot.coverage.ordersComplete ||
     !snapshot.coverage.fillsComplete

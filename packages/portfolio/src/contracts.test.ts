@@ -4,8 +4,10 @@ import {
   createPortfolioAccountObservation,
   createPortfolioFillObservation,
   createPortfolioOrderObservation,
+  createPortfolioOrderObservationForSchema,
   createPortfolioPositionObservation,
   createPortfolioSyncSnapshot,
+  createPortfolioSyncSnapshotForSchema,
   type PortfolioAccountObservation,
   type PortfolioPositionObservation,
 } from './contracts.js';
@@ -29,6 +31,7 @@ import {
   POSITION_REQUEST_FINGERPRINT,
   accountObservation,
   fillObservation,
+  mlegParentOrderObservation,
   orderObservation,
   positionObservation,
   shortPositionObservation,
@@ -67,6 +70,21 @@ describe('portfolio source fingerprints', () => {
 });
 
 describe('portfolio observation contracts', () => {
+  it('rejects forged unknown versions at internal restoration boundaries', () => {
+    expect(() =>
+      createPortfolioOrderObservationForSchema(
+        {} as Parameters<typeof createPortfolioOrderObservationForSchema>[0],
+        'daily-trader.portfolio.order-observation.v999',
+      ),
+    ).toThrowError(PortfolioError);
+    expect(() =>
+      createPortfolioSyncSnapshotForSchema(
+        {} as Parameters<typeof createPortfolioSyncSnapshotForSchema>[0],
+        'daily-trader.portfolio.sync-snapshot.v999',
+      ),
+    ).toThrowError(PortfolioError);
+  });
+
   it('constructs an immutable account observation with exact and provider-time evidence', () => {
     const value = accountObservation();
     expect(value).toMatchObject({
@@ -180,6 +198,11 @@ describe('portfolio observation contracts', () => {
     expect(() => positionObservation({ providerAssetClass: 'crypto' })).toThrowError(
       PortfolioError,
     );
+    expect(() =>
+      positionObservation({
+        support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+      }),
+    ).toThrowError(PortfolioError);
   });
 
   it('constructs observed broker orders without executable behavior', () => {
@@ -196,6 +219,56 @@ describe('portfolio observation contracts', () => {
     expect('submit' in value).toBe(false);
     expect('approve' in value).toBe(false);
     expect('cancel' in value).toBe(false);
+  });
+
+  it('preserves an incomplete mleg parent without inferring singular order facts', () => {
+    const value = mlegParentOrderObservation();
+
+    expect(value).toMatchObject({
+      schemaVersion: 'daily-trader.portfolio.order-observation.v2',
+      assetFingerprint: null,
+      symbol: null,
+      instrument: null,
+      providerAssetClass: null,
+      side: null,
+      orderClass: 'mleg',
+      support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+    });
+    expect(Object.isFrozen(value)).toBe(true);
+  });
+
+  it('limits nullable singular order facts to explicitly unsupported mleg structures', () => {
+    expect(() => orderObservation({ symbol: null })).toThrowError(PortfolioError);
+    expect(() => orderObservation({ providerAssetClass: null })).toThrowError(PortfolioError);
+    expect(() => orderObservation({ side: null })).toThrowError(PortfolioError);
+    expect(() =>
+      mlegParentOrderObservation({
+        support: { state: 'unsupported', reason: 'missing_instrument' },
+      }),
+    ).toThrowError(PortfolioError);
+    expect(() =>
+      mlegParentOrderObservation({ instrument: { symbol: 'AAPL', venue: 'XNAS' } }),
+    ).toThrowError(PortfolioError);
+    expect(
+      orderObservation({
+        orderClass: 'mleg',
+        support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+      }).support,
+    ).toEqual({ state: 'unsupported', reason: 'unsupported_order_structure' });
+    expect(() => orderObservation({ orderClass: 'mleg' })).toThrowError(PortfolioError);
+  });
+
+  it('accepts a missing child-leg order type only on an unsupported mleg observation', () => {
+    expect(
+      orderObservation({
+        providerAssetClass: 'us_option',
+        instrument: null,
+        orderClass: 'mleg',
+        orderType: null,
+        support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+      }).orderType,
+    ).toBeNull();
+    expect(() => orderObservation({ orderType: null })).toThrowError(PortfolioError);
   });
 
   it('rejects orders without quantity or notional and invalid filled quantities', () => {

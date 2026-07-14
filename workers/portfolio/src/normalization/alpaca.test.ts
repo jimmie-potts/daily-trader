@@ -84,6 +84,28 @@ function clonedArray(name: string): Record<string, unknown>[] {
   return structuredClone(fixture(name)) as Record<string, unknown>[];
 }
 
+function assignOptionalText(
+  record: Record<string, unknown>,
+  key: string,
+  value: undefined | null | '',
+): void {
+  if (value === undefined) {
+    delete record[key];
+  } else {
+    record[key] = value;
+  }
+}
+
+function mlegOrders(missingValue: undefined | null | ''): Record<string, unknown>[] {
+  const orders = clonedArray('orders-mleg');
+  const parent = orders[0]!;
+  assignOptionalText(parent, 'asset_id', missingValue);
+  assignOptionalText(parent, 'symbol', missingValue);
+  assignOptionalText(parent, 'asset_class', missingValue);
+  assignOptionalText(parent, 'side', missingValue);
+  return orders;
+}
+
 describe('normalizeAlpacaCapture', () => {
   it('preserves exact facts, fingerprints source IDs, and retains unsupported holdings', () => {
     const snapshot = normalizeAlpacaCapture(capture());
@@ -304,6 +326,135 @@ describe('normalizeAlpacaCapture', () => {
       expect.objectContaining<Partial<AlpacaPaperApiError>>({
         code: 'ALPACA_ORDER_LEGS_NESTED',
       }),
+    );
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+    ['empty', ''],
+  ] as const)(
+    'preserves mleg parent and concrete child facts when optional parent fields are %s',
+    (_label, missingValue) => {
+      const snapshot = normalizeAlpacaCapture(
+        capture({ fills: [], orders: mlegOrders(missingValue) }),
+      );
+      const parent = snapshot.orders.find(
+        ({ orderClass, symbol }) => orderClass === 'mleg' && symbol === null,
+      );
+
+      expect(parent).toMatchObject({
+        schemaVersion: 'daily-trader.portfolio.order-observation.v2',
+        assetFingerprint: null,
+        symbol: null,
+        instrument: null,
+        providerAssetClass: null,
+        side: null,
+        orderType: 'limit',
+        orderClass: 'mleg',
+        support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+      });
+
+      const legs = snapshot.orders.filter(({ symbol }) => symbol !== null);
+      expect(legs).toHaveLength(3);
+      expect(legs.map(({ symbol }) => symbol).sort()).toEqual([
+        'AAPL260116C00200001',
+        'AAPL260116C00200002',
+        'AAPL260116C00200003',
+      ]);
+      expect(legs.map(({ side }) => side).sort()).toEqual(['buy', 'buy', 'sell']);
+      expect(Object.fromEntries(legs.map(({ symbol, quantity }) => [symbol, quantity]))).toEqual({
+        AAPL260116C00200001: '6',
+        AAPL260116C00200002: '3',
+        AAPL260116C00200003: '9',
+      });
+      for (const leg of legs) {
+        expect(leg).toMatchObject({
+          providerAssetClass: 'us_option',
+          instrument: null,
+          orderType: null,
+          orderClass: 'mleg',
+          support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+        });
+        expect(leg.assetFingerprint).not.toBeNull();
+      }
+      expect(JSON.stringify(snapshot.orders)).not.toContain('ratio_qty');
+    },
+  );
+
+  it('uses retained parent role to keep ratio-leg fill facts independent from populated spread-parent facts', () => {
+    const orders = mlegOrders(undefined);
+    Object.assign(orders[0]!, {
+      asset_id: 'fixture-option-asset-2',
+      symbol: 'AAPL260116C00200002',
+      asset_class: 'us_option',
+      side: 'sell',
+    });
+    const fills = clonedArray('fills');
+    fills[0]!.id = 'fixture-mleg-leg-fill';
+    fills[0]!.order_id = 'fixture-mleg-parent';
+    fills[0]!.symbol = 'AAPL260116C00200001';
+    fills[0]!.qty = '1';
+    fills[0]!.cum_qty = '1';
+    fills[0]!.leaves_qty = '5';
+
+    const snapshot = normalizeAlpacaCapture(capture({ fills, orders }));
+    const parent = snapshot.orders.find(
+      ({ orderType, quantity }) => orderType === 'limit' && quantity === '3',
+    );
+
+    expect(parent).toMatchObject({
+      symbol: 'AAPL260116C00200002',
+      providerAssetClass: 'us_option',
+      side: 'sell',
+      quantity: '3',
+      orderClass: 'mleg',
+      support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+    });
+    expect(snapshot.fills[0]).toMatchObject({
+      orderFingerprint: parent?.orderFingerprint,
+      assetFingerprint: null,
+      symbol: 'AAPL260116C00200001',
+      instrument: null,
+      side: 'buy',
+      quantity: '1',
+      cumulativeQuantity: '1',
+      leavesQuantity: '5',
+    });
+  });
+
+  it('still compares a retained mleg child fill against that ratio leg quantity', () => {
+    const fills = clonedArray('fills');
+    Object.assign(fills[0]!, {
+      id: 'fixture-mleg-child-fill',
+      order_id: 'fixture-mleg-leg-1',
+      symbol: 'AAPL260116C00200001',
+      side: 'buy',
+      qty: '1',
+      cum_qty: '1',
+      leaves_qty: '4',
+    });
+
+    expect(() =>
+      normalizeAlpacaCapture(capture({ fills, orders: mlegOrders(undefined) })),
+    ).toThrowError(
+      expect.objectContaining<Partial<AlpacaPaperApiError>>({
+        code: 'ALPACA_FILL_ORDER_QUANTITY_INCONSISTENT',
+      }),
+    );
+  });
+
+  it.each([
+    ['asset_id', undefined],
+    ['symbol', null],
+    ['asset_class', ''],
+    ['side', undefined],
+  ] as const)('still rejects a simple order with invalid %s', (field, value) => {
+    const orders = clonedArray('orders');
+    assignOptionalText(orders[0]!, field, value);
+
+    expect(() => normalizeAlpacaCapture(capture({ orders }))).toThrowError(
+      expect.objectContaining<Partial<AlpacaPaperApiError>>({ code: 'ALPACA_TEXT_INVALID' }),
     );
   });
 

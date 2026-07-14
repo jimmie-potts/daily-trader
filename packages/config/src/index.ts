@@ -44,6 +44,8 @@ const PORTFOLIO_ENVIRONMENT_SETTINGS = Object.freeze([
   'PORTFOLIO_SHUTDOWN_TIMEOUT_MS',
 ] as const);
 const PORTFOLIO_ENVIRONMENT_SETTING_SET = new Set<string>(PORTFOLIO_ENVIRONMENT_SETTINGS);
+const PREFERRED_DEFAULT_PORTFOLIO_MAX_ORDERS = 5_000;
+const PREFERRED_DEFAULT_PORTFOLIO_MAX_FILLS_PER_SYNC = 1_999;
 
 const PAPER_BROKER_ENVIRONMENT_SETTINGS = Object.freeze([
   'PAPER_BROKER_BASE_URL',
@@ -111,6 +113,23 @@ const integerString = (defaultValue: string, minimum: number, maximum: number): 
       .transform(Number)
       .pipe(z.number().int().min(minimum).max(maximum)),
   );
+
+const optionalIntegerString = (minimum: number, maximum: number): z.ZodType<number | undefined> =>
+  z.preprocess(
+    emptyStringToUndefined,
+    z
+      .string()
+      .regex(/^\d+$/, 'must be an integer')
+      .transform(Number)
+      .pipe(z.number().int().min(minimum).max(maximum))
+      .optional(),
+  );
+
+const effectivePortfolioItemLimit = (
+  configuredLimit: number | undefined,
+  preferredDefault: number,
+  pageBudget: number,
+): number => configuredLimit ?? Math.min(preferredDefault, pageBudget - 1);
 
 const booleanString = z
   .enum(['true', 'false'], {
@@ -297,8 +316,8 @@ const environmentSchema = z
     PORTFOLIO_ORDER_PAGE_SIZE: integerString('500', 1, 500),
     PORTFOLIO_FILL_PAGE_SIZE: integerString('100', 1, 100),
     PORTFOLIO_MAX_POSITIONS: integerString('1000', 1, 10_000),
-    PORTFOLIO_MAX_ORDERS: integerString('5000', 1, 50_000),
-    PORTFOLIO_MAX_FILLS_PER_SYNC: integerString('5000', 1, 50_000),
+    PORTFOLIO_MAX_ORDERS: optionalIntegerString(1, 50_000),
+    PORTFOLIO_MAX_FILLS_PER_SYNC: optionalIntegerString(1, 50_000),
     PORTFOLIO_RETRY_MAX_ATTEMPTS: integerString('3', 1, 5),
     PORTFOLIO_RETRY_BASE_DELAY_MS: integerString('250', 100, 30_000),
     PORTFOLIO_RETRY_MAX_DELAY_MS: integerString('5000', 100, 120_000),
@@ -458,6 +477,36 @@ const environmentSchema = z
         code: 'custom',
         message: 'must be less than or equal to PORTFOLIO_RETRY_MAX_DELAY_MS',
         path: ['PORTFOLIO_RETRY_BASE_DELAY_MS'],
+      });
+    }
+
+    const orderPageBudget = environment.PORTFOLIO_MAX_PAGES * environment.PORTFOLIO_ORDER_PAGE_SIZE;
+    const maxOrders = effectivePortfolioItemLimit(
+      environment.PORTFOLIO_MAX_ORDERS,
+      PREFERRED_DEFAULT_PORTFOLIO_MAX_ORDERS,
+      orderPageBudget,
+    );
+    if (maxOrders < 1 || maxOrders >= orderPageBudget) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'must be less than PORTFOLIO_MAX_PAGES multiplied by PORTFOLIO_ORDER_PAGE_SIZE so complete pagination can be observed',
+        path: ['PORTFOLIO_MAX_ORDERS'],
+      });
+    }
+
+    const fillPageBudget = environment.PORTFOLIO_MAX_PAGES * environment.PORTFOLIO_FILL_PAGE_SIZE;
+    const maxFillsPerSync = effectivePortfolioItemLimit(
+      environment.PORTFOLIO_MAX_FILLS_PER_SYNC,
+      PREFERRED_DEFAULT_PORTFOLIO_MAX_FILLS_PER_SYNC,
+      fillPageBudget,
+    );
+    if (maxFillsPerSync < 1 || maxFillsPerSync >= fillPageBudget) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'must be less than PORTFOLIO_MAX_PAGES multiplied by PORTFOLIO_FILL_PAGE_SIZE so complete pagination can be observed',
+        path: ['PORTFOLIO_MAX_FILLS_PER_SYNC'],
       });
     }
 
@@ -731,6 +780,16 @@ export function loadConfig(environment: EnvironmentMap = process.env): Applicati
 
   const parsed = result.data;
   const usesLocalDefaults = parsed.APP_ENV === 'local' || parsed.APP_ENV === 'test';
+  const maxOrders = effectivePortfolioItemLimit(
+    parsed.PORTFOLIO_MAX_ORDERS,
+    PREFERRED_DEFAULT_PORTFOLIO_MAX_ORDERS,
+    parsed.PORTFOLIO_MAX_PAGES * parsed.PORTFOLIO_ORDER_PAGE_SIZE,
+  );
+  const maxFillsPerSync = effectivePortfolioItemLimit(
+    parsed.PORTFOLIO_MAX_FILLS_PER_SYNC,
+    PREFERRED_DEFAULT_PORTFOLIO_MAX_FILLS_PER_SYNC,
+    parsed.PORTFOLIO_MAX_PAGES * parsed.PORTFOLIO_FILL_PAGE_SIZE,
+  );
 
   let signalConfiguration: SignalConfiguration;
   try {
@@ -840,8 +899,8 @@ export function loadConfig(environment: EnvironmentMap = process.env): Applicati
         orderPageSize: parsed.PORTFOLIO_ORDER_PAGE_SIZE,
         fillPageSize: parsed.PORTFOLIO_FILL_PAGE_SIZE,
         maxPositions: parsed.PORTFOLIO_MAX_POSITIONS,
-        maxOrders: parsed.PORTFOLIO_MAX_ORDERS,
-        maxFillsPerSync: parsed.PORTFOLIO_MAX_FILLS_PER_SYNC,
+        maxOrders,
+        maxFillsPerSync,
         retry: Object.freeze({
           maxAttempts: parsed.PORTFOLIO_RETRY_MAX_ATTEMPTS,
           baseDelayMs: parsed.PORTFOLIO_RETRY_BASE_DELAY_MS,

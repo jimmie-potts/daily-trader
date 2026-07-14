@@ -12,11 +12,12 @@ As a paper-account owner, I want a clear portfolio dashboard so that I can inspe
 - Position rows show supported or unsupported state, symbol and application venue when known, side, exact quantity, broker mark, signed market value, unrealized profit and loss, allocation when available, currency, and truthful unavailable reasons. Unsupported and null-mark holdings remain visible.
 - Bounded observed order and fill sections are labeled provider observations, not local intents or executable orders. They expose no raw provider or database identifier.
 - Empty, warming, stale, partial-cycle failure, provider unavailable, account mismatch, reconciliation drift, suppressed calculation, unsupported holding, null mark, and database unavailable states are explicit and visually distinct from a healthy empty account.
+- The API origin remains loopback-only and emits valid URL authority for IPv4, localhost, and the bracketed `::1` literal. Runtime decoding treats the API payload as untrusted and fails closed on contradictory no-snapshot evidence, complete projections without required exact metrics, or account/metric currency disagreement.
 - Rendering is deterministic under an injected clock, responsive, keyboard-readable, and safe against untrusted text. It does not include raw HTML from provider data or send broker/account data to third-party analytics.
 
 ## Validation
 
-- Component or browser tests cover complete populated and empty portfolios, long/short rows, stale last-good data, all health and suppression states, unsupported/null-mark visibility, bounded observed orders/fills, deterministic fixed-clock rendering, and non-GET/action absence.
+- Component or browser tests cover complete populated and empty portfolios, long/short rows, stale last-good data, all health and suppression states, unsupported/null-mark visibility, bounded observed orders/fills, loopback IPv6 URL construction, contradictory cross-field payload rejection, deterministic fixed-clock rendering, and non-GET/action absence.
 - Build the production web app and inspect rendered output for secrets, account IDs, internal IDs, raw payloads, provider-write links, alert controls, recommendations, and execution language.
 
 ## Dependencies

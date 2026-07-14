@@ -25,11 +25,15 @@ export const PORTFOLIO_ACCOUNT_SCHEMA_VERSION =
   'daily-trader.portfolio.account-observation.v1' as const;
 export const PORTFOLIO_POSITION_SCHEMA_VERSION =
   'daily-trader.portfolio.position-observation.v1' as const;
-export const PORTFOLIO_ORDER_SCHEMA_VERSION =
+export const PORTFOLIO_ORDER_SCHEMA_VERSION_V1 =
   'daily-trader.portfolio.order-observation.v1' as const;
+export const PORTFOLIO_ORDER_SCHEMA_VERSION =
+  'daily-trader.portfolio.order-observation.v2' as const;
 export const PORTFOLIO_FILL_SCHEMA_VERSION = 'daily-trader.portfolio.fill-observation.v1' as const;
-export const PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION =
+export const PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1 =
   'daily-trader.portfolio.sync-snapshot.v1' as const;
+export const PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION =
+  'daily-trader.portfolio.sync-snapshot.v2' as const;
 export const PORTFOLIO_PROVIDER = 'alpaca' as const;
 export const PORTFOLIO_BROKER_ENVIRONMENT = 'paper' as const;
 export const PORTFOLIO_MARK_SOURCE = 'broker_mark' as const;
@@ -39,8 +43,16 @@ export type PortfolioPositionSide = 'long' | 'short';
 export type PortfolioOrderSide = 'buy' | 'sell';
 export type PortfolioOrderState = 'open' | 'terminal' | 'unknown';
 export type PortfolioFillType = 'fill' | 'partial_fill';
+export type PortfolioOrderSchemaVersion =
+  typeof PORTFOLIO_ORDER_SCHEMA_VERSION_V1 | typeof PORTFOLIO_ORDER_SCHEMA_VERSION;
+export type PortfolioSyncSnapshotSchemaVersion =
+  typeof PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1 | typeof PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION;
 export type PortfolioHoldingSupportReason =
-  'missing_instrument' | 'unsupported_asset_class' | 'unsupported_currency' | 'unsupported_venue';
+  | 'missing_instrument'
+  | 'unsupported_asset_class'
+  | 'unsupported_currency'
+  | 'unsupported_order_structure'
+  | 'unsupported_venue';
 
 export type PortfolioHoldingSupport =
   | Readonly<{ state: 'supported'; reason: null }>
@@ -169,16 +181,16 @@ export interface CreatePortfolioPositionObservationInput {
 }
 
 export interface PortfolioOrderObservation extends PortfolioObservationContext {
-  readonly schemaVersion: typeof PORTFOLIO_ORDER_SCHEMA_VERSION;
+  readonly schemaVersion: PortfolioOrderSchemaVersion;
   readonly orderObservationId: PortfolioFingerprint;
   readonly orderFingerprint: PortfolioFingerprint;
   readonly clientOrderFingerprint: PortfolioFingerprint;
   readonly assetFingerprint: PortfolioFingerprint | null;
-  readonly symbol: string;
+  readonly symbol: string | null;
   readonly instrument: InstrumentId | null;
-  readonly providerAssetClass: string;
-  readonly side: PortfolioOrderSide;
-  readonly orderType: string;
+  readonly providerAssetClass: string | null;
+  readonly side: PortfolioOrderSide | null;
+  readonly orderType: string | null;
   readonly orderClass: string | null;
   readonly positionIntent: string | null;
   readonly timeInForce: string;
@@ -304,7 +316,7 @@ export interface PortfolioSnapshotCoverage {
 }
 
 export interface PortfolioSyncSnapshot {
-  readonly schemaVersion: typeof PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION;
+  readonly schemaVersion: PortfolioSyncSnapshotSchemaVersion;
   readonly snapshotId: PortfolioFingerprint;
   readonly provider: typeof PORTFOLIO_PROVIDER;
   readonly brokerEnvironment: typeof PORTFOLIO_BROKER_ENVIRONMENT;
@@ -368,6 +380,10 @@ function symbol(value: unknown): string {
   return value;
 }
 
+function optionalSymbol(value: unknown): string | null {
+  return value === null ? null : symbol(value);
+}
+
 function currency(value: unknown): string {
   if (typeof value !== 'string' || !CURRENCY.test(value)) {
     throw new PortfolioError('contract_invalid');
@@ -411,6 +427,10 @@ function optionalFingerprint(value: unknown): PortfolioFingerprint | null {
   return value === null ? null : fingerprint(value);
 }
 
+function optionalBoundedIdentifier(value: unknown): string | null {
+  return value === null ? null : boundedIdentifier(value);
+}
+
 function instrument(value: unknown, expectedSymbol: string): InstrumentId | null {
   if (value === null) return null;
   if (typeof value !== 'object') throw new PortfolioError('contract_invalid');
@@ -435,6 +455,7 @@ function support(value: unknown): PortfolioHoldingSupport {
     'missing_instrument',
     'unsupported_asset_class',
     'unsupported_currency',
+    'unsupported_order_structure',
     'unsupported_venue',
   ];
   if (record.state === 'unsupported' && reasons.includes(record.reason as never)) {
@@ -596,6 +617,9 @@ export function createPortfolioPositionObservation(
   const normalizedSymbol = symbol(input.symbol);
   const normalizedInstrument = instrument(input.instrument, normalizedSymbol);
   const normalizedSupport = support(input.support);
+  if (normalizedSupport.reason === 'unsupported_order_structure') {
+    throw new PortfolioError('contract_invalid');
+  }
   const providerAssetClass = boundedIdentifier(input.providerAssetClass);
   const normalizedCurrency = currency(input.currency);
   if (
@@ -709,22 +733,72 @@ export function orderObservationContent(
   };
 }
 
-export function createPortfolioOrderObservation(
+/** @internal Restores validated legacy observations without changing their identity bytes. */
+export function createPortfolioOrderObservationForSchema(
   input: CreatePortfolioOrderObservationInput,
+  schemaVersion: unknown,
 ): PortfolioOrderObservation {
-  const normalizedSymbol = symbol(input.symbol);
-  const side = input.side;
-  if (side !== 'buy' && side !== 'sell') throw new PortfolioError('contract_invalid');
+  if (
+    schemaVersion !== PORTFOLIO_ORDER_SCHEMA_VERSION_V1 &&
+    schemaVersion !== PORTFOLIO_ORDER_SCHEMA_VERSION
+  ) {
+    throw new PortfolioError('contract_invalid');
+  }
+  const legacy = schemaVersion === PORTFOLIO_ORDER_SCHEMA_VERSION_V1;
+  const normalizedSymbol = legacy ? symbol(input.symbol) : optionalSymbol(input.symbol);
+  let side: PortfolioOrderSide | null;
+  if (input.side === 'buy' || input.side === 'sell') {
+    side = input.side;
+  } else if (!legacy && input.side === null) {
+    side = null;
+  } else {
+    throw new PortfolioError('contract_invalid');
+  }
   const state = input.state;
   if (state !== 'open' && state !== 'terminal' && state !== 'unknown') {
     throw new PortfolioError('contract_invalid');
   }
   const normalizedSupport = support(input.support);
-  const normalizedInstrument = instrument(input.instrument, normalizedSymbol);
-  const providerAssetClass = boundedIdentifier(input.providerAssetClass);
+  const normalizedInstrument =
+    normalizedSymbol === null
+      ? (() => {
+          if (input.instrument !== null) throw new PortfolioError('contract_invalid');
+          return null;
+        })()
+      : instrument(input.instrument, normalizedSymbol);
+  const providerAssetClass = legacy
+    ? boundedIdentifier(input.providerAssetClass)
+    : optionalBoundedIdentifier(input.providerAssetClass);
+  const orderClass = optionalProviderText(input.orderClass);
+  const orderType = legacy
+    ? boundedIdentifier(input.orderType)
+    : optionalBoundedIdentifier(input.orderType);
+  const incompleteSingularIdentity =
+    normalizedSymbol === null || providerAssetClass === null || side === null;
+  const missingSingularOrderFact = incompleteSingularIdentity || orderType === null;
+  const isMlegStructure = orderClass === 'mleg';
+  if (legacy && normalizedSupport.reason === 'unsupported_order_structure') {
+    throw new PortfolioError('contract_invalid');
+  }
+  if (!legacy) {
+    if (
+      (missingSingularOrderFact && !isMlegStructure) ||
+      (isMlegStructure &&
+        (normalizedSupport.state !== 'unsupported' ||
+          normalizedSupport.reason !== 'unsupported_order_structure'))
+    ) {
+      throw new PortfolioError('contract_invalid');
+    }
+    if (incompleteSingularIdentity && normalizedInstrument !== null) {
+      throw new PortfolioError('contract_invalid');
+    }
+    if (!isMlegStructure && normalizedSupport.reason === 'unsupported_order_structure') {
+      throw new PortfolioError('contract_invalid');
+    }
+  }
   if (
     normalizedSupport.state === 'supported' &&
-    (providerAssetClass !== 'us_equity' || normalizedInstrument === null)
+    (providerAssetClass !== 'us_equity' || normalizedInstrument === null || side === null)
   ) {
     throw new PortfolioError('contract_invalid');
   }
@@ -745,7 +819,7 @@ export function createPortfolioOrderObservation(
   if (limitPrice !== null) positive(limitPrice);
   if (stopPrice !== null) positive(stopPrice);
   const unsigned = Object.freeze({
-    schemaVersion: PORTFOLIO_ORDER_SCHEMA_VERSION,
+    schemaVersion,
     ...context(input.accountFingerprint, input.sourceRequestFingerprint, input.observedAt),
     orderFingerprint: fingerprint(input.orderFingerprint),
     clientOrderFingerprint: fingerprint(input.clientOrderFingerprint),
@@ -754,8 +828,8 @@ export function createPortfolioOrderObservation(
     instrument: normalizedInstrument,
     providerAssetClass,
     side,
-    orderType: boundedIdentifier(input.orderType),
-    orderClass: optionalProviderText(input.orderClass),
+    orderType,
+    orderClass,
     positionIntent: optionalProviderText(input.positionIntent),
     timeInForce: boundedIdentifier(input.timeInForce),
     providerStatus: boundedIdentifier(input.providerStatus),
@@ -789,6 +863,12 @@ export function createPortfolioOrderObservation(
       JSON.stringify(observationIdentityContent(orderObservationContent(unsigned))),
     ),
   });
+}
+
+export function createPortfolioOrderObservation(
+  input: CreatePortfolioOrderObservationInput,
+): PortfolioOrderObservation {
+  return createPortfolioOrderObservationForSchema(input, PORTFOLIO_ORDER_SCHEMA_VERSION);
 }
 
 export function fillObservationContent(
@@ -895,9 +975,17 @@ export function syncSnapshotContent(
   };
 }
 
-export function createPortfolioSyncSnapshot(
+/** @internal Restores validated legacy snapshots without changing their identity bytes. */
+export function createPortfolioSyncSnapshotForSchema(
   input: CreatePortfolioSyncSnapshotInput,
+  schemaVersion: unknown,
 ): PortfolioSyncSnapshot {
+  if (
+    schemaVersion !== PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1 &&
+    schemaVersion !== PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION
+  ) {
+    throw new PortfolioError('contract_invalid');
+  }
   const captureStartedAt = timestamp(input.captureStartedAt);
   const captureCompletedAt = timestamp(input.captureCompletedAt);
   const activityWindowStartedAt = timestamp(input.activityWindowStartedAt);
@@ -933,6 +1021,13 @@ export function createPortfolioSyncSnapshot(
   uniqueBy(positions, (value) => value.assetFingerprint);
   uniqueBy(orders, (value) => value.orderFingerprint);
   uniqueBy(fills, (value) => value.fillFingerprint);
+  const expectedOrderSchemaVersion =
+    schemaVersion === PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1
+      ? PORTFOLIO_ORDER_SCHEMA_VERSION_V1
+      : PORTFOLIO_ORDER_SCHEMA_VERSION;
+  if (orders.some((order) => order.schemaVersion !== expectedOrderSchemaVersion)) {
+    throw new PortfolioError('contract_invalid');
+  }
   for (const observation of [input.account, ...positions, ...orders, ...fills]) {
     if (observation.accountFingerprint !== accountFingerprint) {
       throw new PortfolioError('contract_invalid');
@@ -948,7 +1043,7 @@ export function createPortfolioSyncSnapshot(
     }
   }
   const unsigned = Object.freeze({
-    schemaVersion: PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION,
+    schemaVersion,
     provider: PORTFOLIO_PROVIDER,
     brokerEnvironment: PORTFOLIO_BROKER_ENVIRONMENT,
     accountFingerprint,
@@ -972,4 +1067,10 @@ export function createPortfolioSyncSnapshot(
     ...unsigned,
     snapshotId: hashPortfolioCanonical(JSON.stringify(syncSnapshotContent(unsigned))),
   });
+}
+
+export function createPortfolioSyncSnapshot(
+  input: CreatePortfolioSyncSnapshotInput,
+): PortfolioSyncSnapshot {
+  return createPortfolioSyncSnapshotForSchema(input, PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION);
 }

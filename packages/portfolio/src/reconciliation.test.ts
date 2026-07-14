@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PortfolioSyncSnapshot } from './contracts.js';
 import { PortfolioError } from './errors.js';
+import { parsePortfolioSyncSnapshot } from './serialization.js';
 import {
   classifyPortfolioSnapshotDelta,
   createPortfolioPreparedProjection,
@@ -60,6 +61,24 @@ function laterEquivalentSnapshot(): PortfolioSyncSnapshot {
       }),
     ],
   });
+}
+
+function legacyV1Snapshot(): PortfolioSyncSnapshot {
+  const current = syncSnapshot({ positions: [], fills: [] });
+  return parsePortfolioSyncSnapshot(
+    JSON.stringify({
+      ...current,
+      schemaVersion: 'daily-trader.portfolio.sync-snapshot.v1',
+      orders: [
+        {
+          ...current.orders[0]!,
+          schemaVersion: 'daily-trader.portfolio.order-observation.v1',
+          orderObservationId: '010e68b98b3dc92eec77a882f0d2cba26f23bd963c1a925716ef8073a641ea17',
+        },
+      ],
+      snapshotId: '9e9301c6e2d9861de98bdf3e9c51ebf9d556e2a24325c0806bb7c22614d308e8',
+    }),
+  );
 }
 
 function rebuildPrepared(
@@ -233,6 +252,17 @@ describe('provider-observation versus local-projection integrity', () => {
       reasons: [],
     });
     expect(serializePortfolioReconciliation(value)).toContain('"status":"converged"');
+  });
+
+  it('continues to reconcile a validated legacy v1 snapshot', () => {
+    const snapshot = legacyV1Snapshot();
+    const prepared = preparePortfolioProjection(snapshot, null);
+
+    expect(reconcilePortfolioProjection(snapshot, prepared)).toMatchObject({
+      status: 'converged',
+      snapshotId: snapshot.snapshotId,
+      reasons: [],
+    });
   });
 
   it('makes missing local state and incomplete provider evidence unavailable', () => {

@@ -181,6 +181,24 @@ export function orderObservation(
   });
 }
 
+export function mlegParentOrderObservation(
+  overrides: Partial<CreatePortfolioOrderObservationInput> = {},
+): PortfolioOrderObservation {
+  return orderObservation({
+    orderFingerprint: sourceFingerprint('order', 'mleg-parent-order'),
+    clientOrderFingerprint: sourceFingerprint('client_order', 'mleg-parent-client-order'),
+    assetFingerprint: null,
+    symbol: null,
+    instrument: null,
+    providerAssetClass: null,
+    side: null,
+    orderClass: 'mleg',
+    positionIntent: null,
+    support: { state: 'unsupported', reason: 'unsupported_order_structure' },
+    ...overrides,
+  });
+}
+
 export function fillObservation(
   overrides: Partial<CreatePortfolioFillObservationInput> = {},
 ): PortfolioFillObservation {

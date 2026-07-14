@@ -537,7 +537,8 @@ function decodeObservedFills(value: unknown): DashboardObservedFills | null {
 
 /**
  * Decodes the versioned read model into an immutable application-owned value.
- * Unknown keys, unbounded collections, and malformed nested values fail closed.
+ * Unknown keys, unbounded collections, malformed nested values, and contradictory
+ * cross-field state fail closed.
  */
 export function decodePortfolioDashboardSnapshot(
   value: unknown,
@@ -567,6 +568,42 @@ export function decodePortfolioDashboardSnapshot(
     observedOrders === null ||
     observedFills === null
   ) {
+    return null;
+  }
+  const hasSnapshotHealthEvidence =
+    health.snapshotAsOf !== null ||
+    health.ageMilliseconds !== null ||
+    health.knowledgeStartAt !== null ||
+    health.knowledgeEndAt !== null ||
+    health.reconciliation !== null ||
+    health.change !== null ||
+    health.projection !== null ||
+    health.incompleteReason !== null;
+  const hasObservedOrderEvidence =
+    observedOrders.count !== 0 || Object.keys(observedOrders.byStatus).length !== 0;
+  const hasObservedFillEvidence =
+    observedFills.count !== 0 ||
+    observedFills.createdAfterExclusive !== null ||
+    observedFills.createdBeforeExclusive !== null ||
+    observedFills.latestTransactionAt !== null ||
+    observedFills.initialBaseline !== null;
+  const contradictsNoSnapshot =
+    health.state === 'no_snapshot' &&
+    (hasSnapshotHealthEvidence ||
+      account !== null ||
+      metrics !== null ||
+      positions.length > 0 ||
+      hasObservedOrderEvidence ||
+      hasObservedFillEvidence);
+  const missesCompleteProjectionMetrics =
+    health.projection === 'complete' &&
+    (metrics === null ||
+      metrics.unrealizedProfitLoss === null ||
+      metrics.grossExposure === null ||
+      metrics.netExposure === null);
+  const hasCurrencyMismatch =
+    account !== null && metrics !== null && account.currency !== metrics.currency;
+  if (contradictsNoSnapshot || missesCompleteProjectionMetrics || hasCurrencyMismatch) {
     return null;
   }
   return Object.freeze({

@@ -14,10 +14,11 @@ As an operator, I want a bounded recoverable worker to synchronize the full pape
 - Restart abandons or closes any unpromoted cycle safely, reacquires a fence, and begins or resumes only behavior supported by durable state. Overlapping processes cannot both promote current state.
 - Shutdown stops new polls, cancels or completes in-flight GET requests within the deadline, commits or rolls back persistence, releases the worker lease, closes PostgreSQL and telemetry, and never calls a broker mutation.
 - Metrics cover fixed resource/outcome counts, cycle duration, knowledge-interval width, pages, retries and rate limits, last complete age, current staleness, reconciliation state, lease loss, and lifecycle without account, order, fill, position, or credential labels.
+- Terminal status uses one database-clock observation to classify the lease as current, expired, not held, or invalid for a future-heartbeat anomaly. It exposes bounded heartbeat and expiry timestamps but no owner, fence, account, or internal synchronization identifier.
 
 ## Validation
 
-- Test disabled startup, valid empty and populated cycles, complete pagination, retry/rate limit, auth and account mismatch, malformed resource, partial failure at each boundary, capacity, lease contention/loss, database outage/recovery, crash before/after promotion, restart, staleness, and bounded shutdown.
+- Test disabled startup, valid empty and populated cycles, complete pagination, retry/rate limit, auth and account mismatch, malformed resource, partial failure at each boundary, capacity, lease contention/loss, database-clock current/expired/not-held/future-heartbeat status, database outage/recovery, crash before/after promotion, restart, staleness, and bounded shutdown.
 - Prove every provider request is GET, no failed cycle changes current state, and a clean restart converges on the same normalized current projection.
 
 ## Dependencies

@@ -92,7 +92,7 @@ describe('loadConfig', () => {
           fillPageSize: 100,
           maxPositions: 1_000,
           maxOrders: 5_000,
-          maxFillsPerSync: 5_000,
+          maxFillsPerSync: 1_999,
           retry: {
             maxAttempts: 3,
             baseDelayMs: 250,
@@ -528,6 +528,66 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ [setting]: value })).toThrowError(ConfigurationError);
   });
 
+  it('rejects collection limits that cannot be reached within the page budget', () => {
+    expect(() =>
+      loadConfig({
+        PORTFOLIO_MAX_PAGES: '20',
+        PORTFOLIO_ORDER_PAGE_SIZE: '250',
+        PORTFOLIO_MAX_ORDERS: '5000',
+      }),
+    ).toThrowError('PORTFOLIO_MAX_ORDERS');
+    expect(() =>
+      loadConfig({
+        PORTFOLIO_MAX_PAGES: '20',
+        PORTFOLIO_FILL_PAGE_SIZE: '100',
+        PORTFOLIO_MAX_FILLS_PER_SYNC: '2000',
+      }),
+    ).toThrowError('PORTFOLIO_MAX_FILLS_PER_SYNC');
+
+    expect(
+      loadConfig({
+        PORTFOLIO_MAX_PAGES: '20',
+        PORTFOLIO_ORDER_PAGE_SIZE: '250',
+        PORTFOLIO_MAX_ORDERS: '4999',
+        PORTFOLIO_FILL_PAGE_SIZE: '100',
+        PORTFOLIO_MAX_FILLS_PER_SYNC: '1999',
+      }).portfolio.operational,
+    ).toMatchObject({ maxOrders: 4_999, maxFillsPerSync: 1_999 });
+  });
+
+  it('derives omitted collection limits from each selected page budget', () => {
+    expect(
+      loadConfig({
+        PORTFOLIO_ORDER_PAGE_SIZE: '250',
+        PORTFOLIO_MAX_ORDERS: '',
+      }).portfolio.operational,
+    ).toMatchObject({ maxOrders: 4_999, maxFillsPerSync: 1_999 });
+    expect(
+      loadConfig({
+        PORTFOLIO_FILL_PAGE_SIZE: '50',
+        PORTFOLIO_MAX_FILLS_PER_SYNC: '',
+      }).portfolio.operational,
+    ).toMatchObject({ maxOrders: 5_000, maxFillsPerSync: 999 });
+    expect(
+      loadConfig({
+        PORTFOLIO_MAX_PAGES: '2',
+        PORTFOLIO_ORDER_PAGE_SIZE: '250',
+        PORTFOLIO_FILL_PAGE_SIZE: '50',
+      }).portfolio.operational,
+    ).toMatchObject({ maxOrders: 499, maxFillsPerSync: 99 });
+    expect(
+      loadConfig({
+        PORTFOLIO_MAX_PAGES: '100',
+      }).portfolio.operational,
+    ).toMatchObject({ maxOrders: 5_000, maxFillsPerSync: 1_999 });
+    expect(() =>
+      loadConfig({ PORTFOLIO_MAX_PAGES: '1', PORTFOLIO_ORDER_PAGE_SIZE: '1' }),
+    ).toThrowError('PORTFOLIO_MAX_ORDERS');
+    expect(() =>
+      loadConfig({ PORTFOLIO_MAX_PAGES: '1', PORTFOLIO_FILL_PAGE_SIZE: '1' }),
+    ).toThrowError('PORTFOLIO_MAX_FILLS_PER_SYNC');
+  });
+
   it('rejects unsafe portfolio timing relationships', () => {
     expect(() =>
       loadConfig({ PORTFOLIO_SYNC_INTERVAL_MS: '60000', PORTFOLIO_STALE_AFTER_MS: '90000' }),
@@ -653,7 +713,7 @@ describe('safe diagnostics', () => {
         fillPageSize: 100,
         maxPositions: 1_000,
         maxOrders: 5_000,
-        maxFillsPerSync: 5_000,
+        maxFillsPerSync: 1_999,
         retry: {
           maxAttempts: 3,
           baseDelayMs: 250,

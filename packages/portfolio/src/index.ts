@@ -18,10 +18,12 @@ export {
   PORTFOLIO_FILL_SCHEMA_VERSION,
   PORTFOLIO_MARK_SOURCE,
   PORTFOLIO_ORDER_SCHEMA_VERSION,
+  PORTFOLIO_ORDER_SCHEMA_VERSION_V1,
   PORTFOLIO_POSITION_CURRENCY_SOURCE,
   PORTFOLIO_POSITION_SCHEMA_VERSION,
   PORTFOLIO_PROVIDER,
   PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION,
+  PORTFOLIO_SYNC_SNAPSHOT_SCHEMA_VERSION_V1,
   createPortfolioAccountObservation,
   createPortfolioFillObservation,
   createPortfolioOrderObservation,
@@ -39,12 +41,14 @@ export {
   type PortfolioHoldingSupportReason,
   type PortfolioObservationContext,
   type PortfolioOrderObservation,
+  type PortfolioOrderSchemaVersion,
   type PortfolioOrderSide,
   type PortfolioOrderState,
   type PortfolioPositionObservation,
   type PortfolioPositionSide,
   type PortfolioSnapshotCoverage,
   type PortfolioSyncSnapshot,
+  type PortfolioSyncSnapshotSchemaVersion,
 } from './contracts.js';
 export { PortfolioError, type PortfolioErrorCode } from './errors.js';
 export {

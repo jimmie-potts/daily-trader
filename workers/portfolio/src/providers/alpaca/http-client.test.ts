@@ -227,6 +227,35 @@ describe('AlpacaPaperTradingClient', () => {
     expect(() => client(fetch, { fillPageSize: 101 })).toThrow(TypeError);
   });
 
+  it('requires collection limits to leave page budget for a terminal short page', () => {
+    const fetch = routingFetch(defaultRoute, []);
+
+    expect(() => client(fetch, { maxOrderPages: 2, orderPageSize: 2, maxOrders: 4 })).toThrow(
+      'maxOrders must be less than maxOrderPages multiplied by orderPageSize',
+    );
+    expect(() => client(fetch, { maxFillPages: 2, fillPageSize: 2, maxFills: 4 })).toThrow(
+      'maxFills must be less than maxFillPages multiplied by fillPageSize',
+    );
+    expect(() =>
+      client(fetch, {
+        maxOrderPages: 2,
+        orderPageSize: 2,
+        maxOrders: 3,
+        maxFillPages: 2,
+        fillPageSize: 2,
+        maxFills: 3,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      client(fetch, {
+        maxOrderPages: 2,
+        orderPageSize: 2,
+        maxFillPages: 2,
+        fillPageSize: 2,
+      }),
+    ).not.toThrow();
+  });
+
   it('aborts and settles sibling collection reads before rejecting one failed capture', async () => {
     const siblingStates = new Map<string, 'aborted' | 'started'>();
     const receipts: PortfolioRequestReceipt[] = [];
@@ -295,7 +324,7 @@ describe('AlpacaPaperTradingClient', () => {
     expect(calls.find(({ url }) => url.pathname === '/v2/account')?.init.redirect).toBe('manual');
   });
 
-  it('bounds response bytes and page counts', async () => {
+  it('bounds response bytes and page-derived collection capacity', async () => {
     const oversizedFetch = routingFetch(
       (url) =>
         url.pathname === '/v2/account'
@@ -321,7 +350,7 @@ describe('AlpacaPaperTradingClient', () => {
       client(pageLimitedFetch, { maxOrderPages: 1 }).capture({
         previousActivityCutoverAt: null,
       }),
-    ).rejects.toMatchObject({ code: 'ALPACA_ORDER_PAGE_LIMIT_EXCEEDED' });
+    ).rejects.toMatchObject({ code: 'ALPACA_ORDER_LIMIT_EXCEEDED' });
 
     await expect(
       client(routingFetch(defaultRoute, []), { maxPositions: 2 }).capture({

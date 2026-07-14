@@ -1,9 +1,9 @@
 import { loadConfig } from '@daily-trader/config';
 import { FixedClock, createUtcTimestamp } from '@daily-trader/domain';
-import { createLogger, getMeter } from '@daily-trader/observability';
-import { afterEach, describe, expect, it } from 'vitest';
+import { createLogger, getMeter, type AppMeter } from '@daily-trader/observability';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApi, type PortfolioSnapshotReader } from './app.js';
+import { buildApi, type ApiDurationClock, type PortfolioSnapshotReader } from './app.js';
 import type {
   PortfolioApiFillsPage,
   PortfolioApiOrdersPage,
@@ -12,6 +12,44 @@ import type {
 } from './portfolio.js';
 
 const applications: ReturnType<typeof buildApi>[] = [];
+
+interface MetricRecord {
+  readonly name: string;
+  readonly value: number;
+  readonly attributes: Readonly<Record<string, string | number | boolean>> | undefined;
+}
+
+function recordingMeter(): {
+  readonly counters: MetricRecord[];
+  readonly histograms: MetricRecord[];
+  readonly meter: AppMeter;
+} {
+  const counters: MetricRecord[] = [];
+  const histograms: MetricRecord[] = [];
+  const meter: AppMeter = {
+    addCounter: (name, value = 1, attributes): void => {
+      counters.push({ name, value, attributes });
+    },
+    recordGauge: (): void => undefined,
+    recordHealth: (): void => undefined,
+    recordHistogram: (name, value, _unit, attributes): void => {
+      histograms.push({ name, value, attributes });
+    },
+  };
+  return { counters, histograms, meter };
+}
+
+function durationClock(...values: readonly number[]): ApiDurationClock {
+  let offset = 0;
+  return Object.freeze({
+    now: (): number => {
+      const value = values[offset];
+      if (value === undefined) throw new Error('duration clock exhausted');
+      offset += 1;
+      return value;
+    },
+  });
+}
 
 afterEach(async () => {
   await Promise.all(applications.splice(0).map(async (application) => application.close()));
@@ -100,7 +138,7 @@ describe('GET /v1/portfolio', () => {
     items: [],
   };
   const emptyOrdersPage: PortfolioApiOrdersPage = {
-    schemaVersion: 'daily-trader.portfolio.orders-page.v1',
+    schemaVersion: 'daily-trader.portfolio.orders-page.v2',
     access: 'read_only',
     environment: 'paper',
     executionEnabled: false,
@@ -170,8 +208,140 @@ describe('GET /v1/portfolio', () => {
     expect(response.body).not.toContain('submit');
   });
 
+  it('records bounded route outcomes and deterministic durations', async () => {
+    const metrics = recordingMeter();
+    const application = buildApi({
+      config: loadConfig({ APP_ENV: 'test' }),
+      logger: createLogger({ environment: 'test', serviceName: 'api-test' }),
+      meter: metrics.meter,
+      durationClock: durationClock(10, 35, 100, 106, 200, 208),
+      portfolioReader: portfolioReader(),
+    });
+    const unavailableApplication = buildApi({
+      config: loadConfig({ APP_ENV: 'test' }),
+      logger: createLogger({ environment: 'test', serviceName: 'api-test' }),
+      meter: metrics.meter,
+      durationClock: durationClock(300, 311),
+    });
+    applications.push(application, unavailableApplication);
+
+    expect((await application.inject({ method: 'GET', url: '/v1/portfolio' })).statusCode).toBe(
+      200,
+    );
+    expect(
+      (
+        await application.inject({
+          method: 'GET',
+          url: '/v1/portfolio/positions?limit=0',
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (await application.inject({ method: 'GET', url: '/v1/portfolio/orders' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await unavailableApplication.inject({ method: 'GET', url: '/v1/portfolio' })).statusCode,
+    ).toBe(503);
+
+    expect(metrics.counters).toEqual([
+      {
+        name: 'daily_trader.api.portfolio_requests',
+        value: 1,
+        attributes: { outcome: 'succeeded', resource: 'summary' },
+      },
+      {
+        name: 'daily_trader.api.portfolio_requests',
+        value: 1,
+        attributes: { outcome: 'invalid_request', resource: 'positions' },
+      },
+      {
+        name: 'daily_trader.api.portfolio_requests',
+        value: 1,
+        attributes: { outcome: 'succeeded', resource: 'orders' },
+      },
+      {
+        name: 'daily_trader.api.portfolio_requests',
+        value: 1,
+        attributes: { outcome: 'unavailable', resource: 'summary' },
+      },
+    ]);
+    expect(metrics.histograms).toEqual([
+      {
+        name: 'daily_trader.api.portfolio_request_duration',
+        value: 25,
+        attributes: { outcome: 'succeeded', resource: 'summary' },
+      },
+      {
+        name: 'daily_trader.api.portfolio_request_duration',
+        value: 6,
+        attributes: { outcome: 'invalid_request', resource: 'positions' },
+      },
+      {
+        name: 'daily_trader.api.portfolio_request_duration',
+        value: 8,
+        attributes: { outcome: 'succeeded', resource: 'orders' },
+      },
+      {
+        name: 'daily_trader.api.portfolio_request_duration',
+        value: 11,
+        attributes: { outcome: 'unavailable', resource: 'summary' },
+      },
+    ]);
+  });
+
+  it('propagates a client disconnect as cancellation and records it without details', async () => {
+    const metrics = recordingMeter();
+    let startedResolve: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    const application = buildApi({
+      config: loadConfig({ APP_ENV: 'test' }),
+      logger: createLogger({ environment: 'test', serviceName: 'api-test' }),
+      meter: metrics.meter,
+      durationClock: durationClock(40, 52),
+      portfolioReader: portfolioReader({
+        read: (signal) => {
+          observedSignal = signal;
+          startedResolve?.();
+          return new Promise<PortfolioApiRepositorySnapshot>((_resolve, reject) => {
+            const cancelled = (): void => reject(new Error('request disconnected'));
+            if (signal.aborted) cancelled();
+            else signal.addEventListener('abort', cancelled, { once: true });
+          });
+        },
+      }),
+    });
+    applications.push(application);
+    const client = new AbortController();
+    const pendingResponse = application.inject({
+      method: 'GET',
+      url: '/v1/portfolio',
+      signal: client.signal,
+    });
+
+    await started;
+    client.abort();
+    await expect(pendingResponse).rejects.toThrow();
+    await vi.waitFor(() => {
+      expect(observedSignal?.aborted).toBe(true);
+      expect(metrics.counters).toContainEqual({
+        name: 'daily_trader.api.portfolio_requests',
+        value: 1,
+        attributes: { outcome: 'cancelled', resource: 'summary' },
+      });
+    });
+    expect(metrics.histograms).toContainEqual({
+      name: 'daily_trader.api.portfolio_request_duration',
+      value: 12,
+      attributes: { outcome: 'cancelled', resource: 'summary' },
+    });
+  });
+
   it('fails closed with a sanitized unavailable response', async () => {
     const logs: string[] = [];
+    const metrics = recordingMeter();
     const application = buildApi({
       config: loadConfig({ APP_ENV: 'test' }),
       logger: createLogger({
@@ -179,7 +349,8 @@ describe('GET /v1/portfolio', () => {
         serviceName: 'api-test',
         sink: { write: (chunk) => logs.push(chunk) },
       }),
-      meter: getMeter('api-test'),
+      meter: metrics.meter,
+      durationClock: durationClock(70, 79),
       portfolioReader: portfolioReader({
         read: async () => Promise.reject(new Error('secret database detail')),
       }),
@@ -198,6 +369,16 @@ describe('GET /v1/portfolio', () => {
     });
     expect(logs.join('')).toContain('api.portfolio.failed');
     expect(logs.join('')).not.toContain('secret database detail');
+    expect(metrics.counters).toContainEqual({
+      name: 'daily_trader.api.portfolio_requests',
+      value: 1,
+      attributes: { outcome: 'failed', resource: 'summary' },
+    });
+    expect(metrics.histograms).toContainEqual({
+      name: 'daily_trader.api.portfolio_request_duration',
+      value: 9,
+      attributes: { outcome: 'failed', resource: 'summary' },
+    });
   });
 
   it.each(rejectedMethods)('%s cannot mutate the portfolio route', async (method) => {
@@ -216,7 +397,7 @@ describe('GET /v1/portfolio', () => {
 
   it.each([
     ['positions', 'daily-trader.portfolio.positions-page.v1'],
-    ['orders', 'daily-trader.portfolio.orders-page.v1'],
+    ['orders', 'daily-trader.portfolio.orders-page.v2'],
     ['fills', 'daily-trader.portfolio.fills-page.v1'],
   ] as const)(
     'serves bounded GET-only %s pages without caching',

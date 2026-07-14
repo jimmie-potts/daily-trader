@@ -10,6 +10,7 @@ import {
 interface QueryCall {
   readonly text: string;
   readonly values: readonly unknown[] | undefined;
+  readonly signal: AbortSignal | undefined;
 }
 
 class FakeQueryPort implements PortfolioQueryPort {
@@ -25,8 +26,9 @@ class FakeQueryPort implements PortfolioQueryPort {
   public query<Row extends Readonly<Record<string, unknown>>>(
     text: string,
     values?: readonly unknown[],
+    signal?: AbortSignal,
   ): Promise<PortfolioQueryResult<Row>> {
-    this.calls.push({ text, values });
+    this.calls.push({ text, values, signal });
     return Promise.resolve({ rows: this.respond(text, values) as readonly Row[] });
   }
 }
@@ -52,6 +54,45 @@ function pageDatabase(input: {
   });
 }
 
+function mlegParentOrderRow(
+  overrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+  return {
+    symbol: null,
+    venue: null,
+    asset_class: null,
+    supported_for_monitoring: false,
+    unsupported_reason: 'unsupported_order_structure',
+    side: null,
+    position_intent: null,
+    order_type: 'limit',
+    time_in_force: 'day',
+    order_class: 'mleg',
+    status: 'new',
+    quantity: '2',
+    notional: null,
+    filled_quantity: '0',
+    filled_average_price: null,
+    limit_price: '1.25',
+    stop_price: null,
+    trail_price: null,
+    trail_percent: null,
+    high_water_mark: null,
+    commission: null,
+    extended_hours: false,
+    provider_created_at: '2026-07-13 17:10:00+00',
+    provider_updated_at: null,
+    provider_submitted_at: '2026-07-13 17:10:01+00',
+    provider_filled_at: null,
+    provider_canceled_at: null,
+    provider_failed_at: null,
+    provider_replaced_at: null,
+    provider_expired_at: null,
+    observed_at: '2026-07-13 17:19:59+00',
+    ...overrides,
+  };
+}
+
 describe('portfolio API pagination contract', () => {
   it('accepts only canonical bounded limit and offset parameters', () => {
     expect(parsePortfolioApiPageRequest({})).toEqual({ limit: 25, offset: 0 });
@@ -72,6 +113,61 @@ describe('portfolio API pagination contract', () => {
     ]) {
       expect(parsePortfolioApiPageRequest(input)).toBeNull();
     }
+  });
+
+  it('links request cancellation through selection and sibling-cancellable page reads', async () => {
+    const database = pageDatabase({
+      countTable: 'portfolio_order_observations',
+      pageTable: 'portfolio_order_observations AS observed_order',
+      total: '3',
+      rows: [mlegParentOrderRow()],
+    });
+    const controller = new AbortController();
+
+    await new PortfolioApiRepository(database).readOrders(
+      { limit: 1, offset: 0 },
+      controller.signal,
+    );
+
+    expect(database.calls).toHaveLength(3);
+    expect(database.calls[0]?.signal).toBe(controller.signal);
+    expect(database.calls[1]?.signal).toBe(database.calls[2]?.signal);
+    expect(database.calls[1]?.signal).not.toBe(controller.signal);
+  });
+
+  it('cancels and settles a sibling page read when its parallel count read fails', async () => {
+    let pageReadCancelled = false;
+    const parallelSignals: AbortSignal[] = [];
+    const database: PortfolioQueryPort = {
+      query: <Row extends Readonly<Record<string, unknown>>>(
+        text: string,
+        _values?: readonly unknown[],
+        signal?: AbortSignal,
+      ): Promise<PortfolioQueryResult<Row>> => {
+        if (text.includes('FROM portfolio_worker_status AS worker')) {
+          return Promise.resolve({ rows: [SELECTION] as unknown as readonly Row[] });
+        }
+        if (signal === undefined) throw new Error('parallel query signal is unavailable');
+        parallelSignals.push(signal);
+        if (text.includes('COUNT(*)')) return Promise.reject(new Error('count read failed'));
+        return new Promise((_resolve, reject) => {
+          const cancel = (): void => {
+            pageReadCancelled = true;
+            reject(new Error('page read cancelled'));
+          };
+          if (signal.aborted) cancel();
+          else signal.addEventListener('abort', cancel, { once: true });
+        });
+      },
+    };
+
+    await expect(
+      new PortfolioApiRepository(database).readOrders({ limit: 1, offset: 0 }),
+    ).rejects.toThrow('count read failed');
+
+    expect(parallelSignals).toHaveLength(2);
+    expect(parallelSignals[0]).toBe(parallelSignals[1]);
+    expect(pageReadCancelled).toBe(true);
   });
 
   it('returns stable bounded positions with exact values and no internal identifiers', async () => {
@@ -187,6 +283,7 @@ describe('portfolio API pagination contract', () => {
       offset: 49_999,
     });
 
+    expect(page.schemaVersion).toBe('daily-trader.portfolio.orders-page.v2');
     expect(page.items[0]).toMatchObject({
       symbol: 'SPY',
       venue: 'ARCX',
@@ -210,6 +307,51 @@ describe('portfolio API pagination contract', () => {
     });
     const pageQuery = database.calls.find(({ text }) => text.includes('LIMIT $2 OFFSET $3'));
     expect(pageQuery?.values).toEqual(['portfolio-sync-internal', 1, 49_999]);
+  });
+
+  it('exposes nullable mleg parent facts without deriving them from child legs', async () => {
+    const database = pageDatabase({
+      countTable: 'portfolio_order_observations',
+      pageTable: 'portfolio_order_observations AS observed_order',
+      total: '2',
+      rows: [
+        mlegParentOrderRow(),
+        mlegParentOrderRow({
+          symbol: 'AAPL260116C00200001',
+          asset_class: 'us_option',
+          side: 'buy',
+          order_type: null,
+          position_intent: 'buy_to_open',
+        }),
+      ],
+    });
+
+    const page = await new PortfolioApiRepository(database).readOrders({ limit: 2, offset: 0 });
+
+    expect(page).toMatchObject({
+      schemaVersion: 'daily-trader.portfolio.orders-page.v2',
+      items: [
+        {
+          symbol: null,
+          venue: null,
+          assetClass: null,
+          monitoringSupport: 'unsupported',
+          unsupportedReason: 'unsupported_order_structure',
+          side: null,
+          orderType: 'limit',
+          orderClass: 'mleg',
+        },
+        {
+          symbol: 'AAPL260116C00200001',
+          assetClass: 'us_option',
+          side: 'buy',
+          orderType: null,
+          orderClass: 'mleg',
+          monitoringSupport: 'unsupported',
+          unsupportedReason: 'unsupported_order_structure',
+        },
+      ],
+    });
   });
 
   it('returns safe fill facts in deterministic newest-first order without fill identifiers', async () => {
@@ -273,6 +415,24 @@ describe('portfolio API pagination contract', () => {
     );
   });
 
+  it('returns a stable empty page when a valid offset is beyond the selected collection', async () => {
+    const database = pageDatabase({
+      countTable: 'portfolio_order_observations',
+      pageTable: 'portfolio_order_observations AS observed_order',
+      total: '3',
+      rows: [],
+    });
+
+    const page = await new PortfolioApiRepository(database).readOrders({ limit: 10, offset: 25 });
+
+    expect(page).toMatchObject({
+      state: 'available',
+      snapshotAsOf: '2026-07-13T17:20:00.000Z',
+      pagination: { limit: 10, offset: 25, returned: 0, total: 3, nextOffset: null },
+      items: [],
+    });
+  });
+
   it('returns an explicit empty page without issuing resource queries when no snapshot exists', async () => {
     const database = new FakeQueryPort((text) => {
       if (text.includes('FROM portfolio_worker_status AS worker')) {
@@ -281,12 +441,12 @@ describe('portfolio API pagination contract', () => {
       throw new Error('resource query must not run');
     });
 
-    const page = await new PortfolioApiRepository(database).readOrders({ limit: 10, offset: 0 });
+    const page = await new PortfolioApiRepository(database).readOrders({ limit: 10, offset: 25 });
 
     expect(page).toMatchObject({
       state: 'no_snapshot',
       snapshotAsOf: null,
-      pagination: { limit: 10, offset: 0, returned: 0, total: 0, nextOffset: null },
+      pagination: { limit: 10, offset: 25, returned: 0, total: 0, nextOffset: null },
       items: [],
     });
     expect(database.calls).toHaveLength(1);

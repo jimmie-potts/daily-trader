@@ -18,3 +18,7 @@ ADRs capture consequential choices that later work must be able to revisit expli
 | [0012](./0012-read-only-paper-broker-and-snapshot-semantics.md)            | Read-only paper broker and snapshot semantics | Accepted |
 | [0013](./0013-append-only-portfolio-synchronization-and-reconciliation.md) | Portfolio synchronization and reconciliation  | Accepted |
 | [0014](./0014-portfolio-exact-arithmetic-and-valuation.md)                 | Portfolio exact arithmetic and valuation      | Accepted |
+| [0015](./0015-alert-eligibility-lifecycle-and-audit.md)                    | Alert eligibility, lifecycle, and audit       | Accepted |
+| [0016](./0016-local-alert-context-and-delivery-boundary.md)                | Local alert context and delivery boundary     | Accepted |
+
+ADRs 0015-0016 define accepted Phase 5 planning semantics. Their accepted status records the design decision; it does not claim that alert runtime behavior is implemented. Phase 5 story and implementation-note status remains authoritative for delivery.

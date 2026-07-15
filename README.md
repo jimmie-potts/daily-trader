@@ -21,6 +21,8 @@ Market data, signal monitoring, and paper-portfolio synchronization are all disa
 
 The credential-gated Phase 2 provider smoke passed on 2026-07-13 after observing normalized AAPL/XNAS and SPY/ARCX bars and shutting down cleanly. That closes the dependency that had kept Phase 3's already-passing technical matrix open; the Phase 2 and Phase 3 exits and their implementation evidence are recorded under `user-stories/notes/`. Phase 4's credential-free technical matrix also passes, while its broker provider smoke remains separate and must not be inferred from fixtures.
 
+Phase 5 is an accepted plan, not implemented behavior. It targets the [`local read-only portfolio-alert MVP`](./docs/planning/mvp-local-read-only-alerts.md): fixed AAPL/SPY `breakout_plus_volume.v1` alerts in the local dashboard, immutable creation-time portfolio context, append-only correction and review history, and no broker mutation or execution. P5-01 through P5-09 remain `Planned`, and P4-11 must close before implementation begins.
+
 ### Prerequisites
 
 - Node.js 22.13 or newer, before Node.js 23 (`.nvmrc` pins the validated version)
@@ -52,7 +54,9 @@ packages/test-utils/       Deterministic test builders
 infrastructure/postgres/   Versioned application-owned migrations
 infrastructure/            Pinned local Compose services and operating notes
 docs/adr/                  Accepted architecture decisions
+docs/planning/             Accepted MVP scope and directional post-MVP roadmap
 user-stories/              Phase stories and implementation notes
+user-stories/epics/        Product epics and delivery boundaries
 ```
 
 ### Quality and build commands
@@ -154,83 +158,79 @@ For the optional portfolio provider smoke, use an ignored environment file, set 
 - **Decision support first.** The initial product informs and alerts; the user remains the decision-maker.
 - **Deterministic fast path.** Market signals, portfolio calculations, risk checks, and order validation must use testable deterministic code.
 - **AI outside the execution path.** AI may summarize filings and news, explain signals, and help maintain investment theses. It must not submit orders, bypass controls, or silently change strategy rules.
-- **Explain every signal.** Alerts must include the observation, threshold, market-data timestamp, portfolio impact, and invalidation condition when applicable.
+- **Explain every signal.** Alerts must include the observation, threshold, market-data timestamp, portfolio context when available, and invalidation or correction condition when applicable.
 - **Fail safely.** Stale, missing, duplicated, or inconsistent data must prevent trade submission rather than trigger a best guess.
 - **Preserve an audit trail.** Signals, decisions, order intents, approvals, broker responses, orders, and fills must be traceable.
 - **Keep providers replaceable.** Market-data and brokerage integrations belong behind application-owned interfaces.
 
-## Initial scope
+## Accepted MVP Scope
 
-The first release targets a personal portfolio of US-listed equities and ETFs. It aims for seconds-level responsiveness suitable for intraday monitoring, not exchange-colocated high-frequency trading.
+The first product release targets one local user, one expected Alpaca paper account, fixed AAPL and SPY regular-session one-minute bars, the existing `breakout_plus_volume.v1` observation, and dashboard-only explainable alerts. It aims for seconds-level responsiveness suitable for intraday monitoring, not exchange-colocated high-frequency trading.
 
-### MVP capabilities
+The complete scope and exit contract is [`MVP: Local Read-Only Portfolio Alerts`](./docs/planning/mvp-local-read-only-alerts.md). The product epic is [`MVP-01`](./user-stories/epics/mvp-01-local-read-only-portfolio-alerts.md).
 
-- Synchronize cash, positions, orders, and fills from a paper brokerage account.
-- Stream and normalize real-time trades, quotes, and price bars.
-- Display live portfolio value, unrealized profit and loss, allocation, concentration, and exposure.
-- Maintain watchlists.
-- Detect a small set of transparent, configurable market and portfolio signals.
-- Send explainable real-time alerts.
-- Replay recorded market events deterministically.
-- Create an `OrderIntent` for user review without immediately placing an order.
-- Submit approved order intents to a paper account.
-- Record an immutable decision and execution history.
+### MVP Capabilities
+
+- Synchronize and display one expected Alpaca paper account through the existing four-resource GET-only broker adapter.
+- Consume the implemented AAPL/XNAS and SPY/ARCX canonical one-minute bars and `breakout_plus_volume.v1` signal evidence.
+- Create one deterministic explainable dashboard alert for an eligible on-time fired occurrence whether the instrument is held or not held.
+- Freeze immutable creation-time portfolio context with separate availability, freshness, reconciliation, calculation, membership, and support dimensions; portfolio degradation never hides a valid market alert.
+- Preserve append-only alert lineages and revisions through supersession, retraction, and reactivation without resetting local review state.
+- Let the local user mark an alert `acknowledged` or `dismissed` without changing signal, portfolio, broker, or execution state.
+- Use atomic source-position cutovers so enablement never backfills an upstream signal backlog while captured work survives restart.
+- Replay and restart deterministically without losing or duplicating alerts.
+- Meet a measured p95 objective at or below five seconds over at least 100 eligible canonical-commit-to-dashboard samples, then complete three distinct full regular core sessions under the accepted operating criteria.
 
 ### Not in the MVP
 
-- Unattended live trading
-- High-frequency or latency-arbitrage strategies
-- Options, futures, foreign exchange, or cryptocurrency trading
-- Opaque machine-learning trading strategies
-- Social-media sentiment trading
-- Multi-user advisory or brokerage features
-- AI-generated orders or AI overrides of risk controls
+- Configurable symbols, watchlists, additional signals, extended hours, or additional asset classes
+- External notifications, snooze, escalation, charts, custom filters, or alert-rule editing
+- Portfolio-risk decisions, recommendations, order intents, approvals, or broker mutations
+- Paper or live execution
+- Hosted access, authentication, multiple users, or advisory features
+- Historical strategy backtesting, profitability claims, or optimization beyond deterministic replay
+- AI research, opaque machine-learning strategies, or social-media sentiment trading
 
-## System flow
+## MVP System Flow
 
 ```mermaid
 flowchart TD
-    A[Market data stream] --> B[Event ingestion]
-    B --> C[Feature and signal engine]
-    C --> D[Portfolio risk checks]
-    D --> E[Alert or order intent]
-    E --> F[Human approval]
-    F --> G[Paper broker]
-
-    H[News and filings] --> I[Research pipeline]
-    I --> E
+    A[Committed canonical AAPL or SPY bar] --> B[breakout_plus_volume.v1 evaluation]
+    B --> C[Eligible signal transition]
+    C --> D[Durable source receipt and context claim]
+    P[Qualifying Phase 4 evidence or explicit unavailable result] --> D
+    D --> E[Idempotent alert materialization]
+    E --> F[Local dashboard feed and detail]
+    F --> G[Local acknowledge or dismiss event]
 ```
 
-Daily Trader has two processing paths:
+Invalid, stale, gapped, or suppressed market evidence prevents a new alert. Portfolio degradation does not suppress an otherwise eligible alert; its orthogonal limitations remain explicit. Corrections may supersede, retract, or reactivate the same lineage and never masquerade as a fresh alert.
 
-1. **Fast path:** market events → normalized features → deterministic signals → portfolio risk checks → alerts or order intents.
-2. **Research path:** filings, earnings, and news → asynchronous analysis → contextual information attached to alerts and investment theses.
-
-The research path may enrich a decision, but it must never block or control the fast path.
+The broader research, risk, decision, order-intent, paper-execution, and live-execution paths are post-MVP and remain unimplemented. Their directional sequence is recorded in the [`post-MVP roadmap`](./docs/planning/post-mvp-roadmap.md); each phase still requires explicit authorization and implementation-ready stories.
 
 ## Technology stack
 
 The implemented foundation choices are recorded in the accepted architecture decision records.
 
-| Area                           | Initial choice                                    |
-| ------------------------------ | ------------------------------------------------- |
-| Language                       | TypeScript                                        |
-| Web application                | Next.js                                           |
-| Backend API                    | Fastify                                           |
-| Streaming workers              | Long-running Node.js processes                    |
-| Primary database               | PostgreSQL with TimescaleDB                       |
-| Event transport                | Redis Streams                                     |
-| Client updates                 | WebSockets or server-sent events                  |
-| Local environment              | Docker Compose                                    |
-| Initial market data and broker | Alpaca paper environment behind provider adapters |
-| Observability                  | OpenTelemetry with metrics, logs, and traces      |
-| Initial cloud target           | AWS ECS/Fargate, RDS, and ElastiCache             |
+| Area                           | Initial choice                                                              |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| Language                       | TypeScript                                                                  |
+| Web application                | Next.js                                                                     |
+| Backend API                    | Fastify                                                                     |
+| Streaming workers              | Long-running Node.js processes                                              |
+| Primary database               | PostgreSQL with TimescaleDB                                                 |
+| Event transport                | Redis Streams                                                               |
+| MVP client updates             | Bounded polling, SSE, or another measured local mechanism; not yet selected |
+| Local environment              | Docker Compose                                                              |
+| Initial market data and broker | Alpaca paper environment behind provider adapters                           |
+| Observability                  | OpenTelemetry with metrics, logs, and traces                                |
+| Hosted deployment              | Post-MVP; provider not selected                                             |
 
 Kafka or Redpanda should not be introduced until measured throughput or durability requirements justify the operational cost.
 
 ## Core domain concepts
 
-The initial model is expected to include:
+The long-term model is expected to include the following concepts. The accepted MVP stops at local `Alert` behavior; risk, thesis, order-intent, order, fill, and decision-workflow additions remain post-MVP unless already present as read-only broker observations.
 
 ```text
 Account
@@ -252,9 +252,9 @@ DecisionLog
 
 `OrderIntent` is deliberately separate from `Order`. An intent represents a proposed action before approval, final risk validation, and broker submission.
 
-## Initial signals
+## Longer-Term Signal Catalog
 
-The first signal engine should support a small set of configurable rules:
+Post-MVP signal work may support a small set of separately versioned transparent rules:
 
 1. Unusual volume relative to the same time of day.
 2. Breakout above or below a rolling price range.
@@ -303,27 +303,27 @@ Risk checks must run again immediately before broker submission. A provider time
 
 ## Performance objectives
 
-These are initial service-level objectives measured from the time Daily Trader receives an event; upstream provider latency is tracked separately.
+These are initial service-level objectives; upstream provider latency is tracked separately. Only implemented phases and the accepted MVP target may be described as current or planned evidence. Later objectives remain directional.
 
-| Operation                          | Initial objective   |
-| ---------------------------------- | ------------------- |
-| Feature update                     | p95 under 250 ms    |
-| Signal and risk evaluation         | p95 under 250 ms    |
-| Alert dispatch                     | p95 under 2 seconds |
-| End-to-end alert generation        | p95 under 5 seconds |
-| Duplicate order intents            | Zero                |
-| Unexplained broker/portfolio drift | Zero tolerated      |
+| Operation                                                  | Initial objective                            |
+| ---------------------------------------------------------- | -------------------------------------------- |
+| Feature update                                             | p95 under 250 ms                             |
+| Signal evaluation                                          | p95 under 250 ms                             |
+| Portfolio-risk evaluation                                  | Post-MVP target: p95 under 250 ms            |
+| External alert dispatch                                    | Post-MVP channel target: p95 under 2 seconds |
+| Canonical-bar commit to local dashboard-readable MVP alert | MVP target: p95 at or below 5 seconds        |
+| Duplicate order intents                                    | Post-MVP safety target: zero                 |
+| Unexplained broker/portfolio drift                         | Zero tolerated                               |
 
-Performance work should be driven by measurements. Correctness, reproducibility, and safe failure take priority over lower latency.
+Performance work should be driven by measurements. Correctness, reproducibility, and safe failure take priority over lower latency. Improving the MVP alert target below five seconds is explicitly post-MVP work.
 
 ## Delivery roadmap
 
-### Phase 0: Definition
+### Phase 0: Initial definition (complete for implemented scope)
 
-- Confirm asset universe, market hours, broker, data provider, and responsiveness target.
-- Define portfolio and trading constraints.
-- Record architecture and provider decisions as ADRs.
-- Define strategy evaluation and paper-trading acceptance criteria.
+- The accepted ADRs record the asset, session, provider, data, arithmetic, persistence, signal, and read-only portfolio decisions used by Phases 1 through 4.
+- The Phase 5 MVP product boundary and alert decisions are accepted planning in `docs/planning/` and ADRs 0015-0016, not implementation.
+- Portfolio-risk constraints, strategy-evaluation criteria, order intents, and paper-execution acceptance belong to their explicit post-MVP phases and are not authorized by the initial definition.
 
 ### Phase 1: Foundation (complete)
 
@@ -356,38 +356,47 @@ Performance work should be driven by measurements. Correctness, reproducibility,
 - Calculate profit and loss, allocation, concentration, and exposure under reviewed arithmetic rules.
 - Deliver the first read-only paper-portfolio dashboard.
 
-### Phase 5: Alerts and decision workflow
+### Phase 5: Local read-only portfolio alerts (accepted MVP; planned)
 
-- Deliver alerts to the dashboard and one external notification channel.
-- Add acknowledgement, snooze, dismissal, and escalation states.
-- Introduce order intents with an explicit review step.
-- Keep all execution disabled.
+- Materialize eligible fixed-scope signal transitions into durable explainable alerts.
+- Preserve append-only revisions through supersession, retraction, and reactivation while keeping local user disposition separate.
+- Cut alert capture over at an atomic source watermark so pre-enable backlog is not delivered and captured debt survives restart.
+- Attach immutable creation-time portfolio context without letting portfolio degradation suppress the market alert.
+- Deliver a minimal loopback dashboard feed/detail plus an exact same-origin acknowledge/dismiss command boundary.
+- Verify replay, restart, request authenticity, at least 100 latency samples, and three distinct complete regular core sessions.
+- Keep external notifications, risk decisions, order intents, and every broker mutation out of scope.
 
-### Phase 6: Backtesting and strategy evaluation
+### Phase 6: Monitoring usability and breadth (directional)
 
-- Replay historical data through the production signal interfaces.
-- Model spreads, fees, slippage, partial fills, and rejected orders.
-- Guard against look-ahead and survivorship bias.
-- Add out-of-sample and walk-forward evaluation.
-- Compare strategies with suitable benchmarks.
+- Add configurable watchlists and approved symbols.
+- Add richer history, filters, one external notification channel, snooze, and escalation.
+- Improve measured latency below the MVP target and extend calendar coverage.
 
-### Phase 7: Paper execution
+### Phase 7: Evaluation and portfolio intelligence (directional)
 
-- Add approval and final risk-validation workflows.
-- Submit approved intents to the paper broker.
-- Track order state, partial fills, cancellations, and reconciliation.
-- Exercise the kill switch and failure-recovery procedures.
+- Add historical backtesting, out-of-sample and walk-forward evaluation, and alert-quality measurements.
+- Add separately versioned transparent signals and deterministic portfolio-risk alerts.
+- Keep observations non-executable.
 
-### Phase 8: Hardening
+### Phase 8: Decision workflow (directional)
+
+- Add non-executable order intents, human review states, and an immutable decision journal.
+- Revalidate deterministic risk evidence while keeping execution disabled.
+
+### Phase 9: Paper execution (separate authorization required)
+
+- Add independent risk controls, kill switch, final freshness and reconciliation checks, and idempotent paper submission.
+- Reconcile unknown outcomes, orders, partial fills, rejections, and cancellations.
+
+### Phase 10: Hardening and shadow operation (directional)
 
 - Run continuously in paper and shadow modes.
-- Add provider failure, disconnect, stale-data, and duplicate-event tests.
-- Define operational dashboards, alerts, runbooks, and recovery objectives.
-- Perform a security and risk-control review.
+- Exercise provider, data, broker, restart, security, and recovery failure paths.
+- Establish operational dashboards, alerts, runbooks, and recovery objectives.
 
-### Phase 9: Controlled live rollout
+### Phase 11: Controlled live rollout (not authorized)
 
-This phase requires a separate explicit decision. Begin with minimal capital, narrow strategy permissions, hard limits, human approval, and immediate rollback capability. Increase scope only from measured evidence.
+This phase requires a separate explicit decision. Begin only after measured prior-phase evidence, with minimal capital, narrow strategy permissions, hard limits, human approval, and immediate rollback capability. Increase scope only from measured evidence.
 
 ## First vertical slice
 
@@ -400,7 +409,7 @@ The first implementation milestone is intentionally narrow:
 5. Persist the evidence used to create that signal.
 6. Replay the recorded session and reproduce the result exactly.
 
-Only after this slice works should the project add broker synchronization and portfolio-aware alerts.
+This slice is complete, and Phase 4 has implemented the subsequent read-only broker synchronization foundation. The accepted next product slice is MVP-01 local read-only portfolio alerts; implementation remains gated by P4-11.
 
 ## Testing strategy
 
@@ -416,7 +425,7 @@ Strategy success is not measured only by profit and loss. Track latency, data ga
 
 ## Repository status
 
-Phases 1 through 3 are complete. The Phase 2 credential-gated provider smoke observed both approved symbols, and Phase 3's credential-free CI, PostgreSQL migration/replay, service-restart, and live canonical-revision matrix passed. Phase 4's GET-only portfolio implementation and credential-free technical matrix also pass: 74 test files/992 tests, clean migrations plus a seeded Phase 3 upgrade through the nullable multi-leg order constraints, sanitized fixture persistence, projection-integrity reconciliation, versioned API/dashboard reads, an interrupted cycle across a real service restart, last-good pointer preservation, deterministic presentation, and bounded cleanup. P4-11 and the full Phase 4 exit remain open because the separately credential-gated portfolio provider smoke has not run. The defaults remain provider-disabled, signal-disabled, portfolio-disabled, and execution-disabled. See [AGENTS.md](./AGENTS.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
+Phases 1 through 3 are complete. The Phase 2 credential-gated provider smoke observed both approved symbols, and Phase 3's credential-free CI, PostgreSQL migration/replay, service-restart, and live canonical-revision matrix passed. Phase 4's GET-only portfolio implementation and credential-free technical matrix also pass: 74 test files/992 tests, clean migrations plus a seeded Phase 3 upgrade through the nullable multi-leg order constraints, sanitized fixture persistence, projection-integrity reconciliation, versioned API/dashboard reads, an interrupted cycle across a real service restart, last-good pointer preservation, deterministic presentation, and bounded cleanup. P4-11 and the full Phase 4 exit remain open because the separately credential-gated portfolio provider smoke has not run. Phase 5 MVP scope, ADRs, epic, and stories are accepted planning only; no alert runtime exists. The defaults remain provider-disabled, signal-disabled, portfolio-disabled, and execution-disabled. See [AGENTS.md](./AGENTS.md), the [product plan](./docs/planning/README.md), the [accepted ADRs](./docs/adr/README.md), the [implementation notes](./user-stories/notes/README.md), and the [dependency-ordered user stories](./user-stories/README.md) before beginning later work.
 
 ## External documentation
 

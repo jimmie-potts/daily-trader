@@ -18,7 +18,9 @@ Phase 3 adds `@daily-trader/signals`, a dedicated signals worker, bounded exact-
 
 Phase 4 adds a separate GET-only Alpaca paper-broker adapter, `@daily-trader/portfolio`, append-only complete synchronization cycles, fenced worker ownership, exact broker-mark calculations, projection-integrity reconciliation, a local read-only API, and a paper-portfolio dashboard. Its credential-free CI, fixture, clean-and-seeded-upgrade migration, persistence, API/dashboard, interrupted-cycle restart, reconciliation, and cleanup matrix has passed; P4-01 through P4-10 are complete. P4-11 and the full Phase 4 exit remain open only for the separate credential-gated portfolio provider smoke. Portfolio mode defaults to disabled; the only enabled mode is `paper_read_only` against one explicitly expected account. Do not treat broker observations as locally originated orders, describe the open provider-created activity query as transaction-time completeness, or claim that fill activity reconstructs an independent accounting ledger.
 
-No alert, portfolio-risk decision, order intent, approval, broker mutation, execution, AI research, additional asset support, currency conversion, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no later phase is authorized implicitly. The credential-gated portfolio provider smoke remains separate from normal CI and must never be inferred from fixtures.
+Phase 5 is accepted planning for MVP-01 local read-only portfolio alerts. P5-01 through P5-09 are all `Planned`; no alert package, migration, worker, API action, dashboard alert, or Phase 5 implementation note exists yet. The accepted MVP is local, loopback-only, single-user, no-login, dashboard-only, fixed to AAPL/XNAS and SPY/ARCX `breakout_plus_volume.v1`, and preserves append-only alert corrections plus local acknowledge/dismiss history. Alert enablement uses an atomic canonical source-position watermark: pre-start backlog is never a fresh alert, captured work remains durable debt, and corrections may supersede, retract, or reactivate an existing lineage without resetting user disposition. Portfolio context is explanatory and never gates an eligible market alert. P4-11 must close before Phase 5 implementation begins.
+
+No alert runtime, portfolio-risk decision, order intent, approval, broker mutation, execution, AI research, additional asset support, currency conversion, extended-hours, or trade-to-bar behavior exists yet. Broker mode remains paper, execution remains disabled, and no post-MVP phase is authorized implicitly. The credential-gated portfolio provider smoke remains separate from normal CI and must never be inferred from fixtures. Accepted ADRs 0015-0016 record planned alert semantics, not delivered behavior.
 
 ## Repository structure and commands
 
@@ -37,6 +39,8 @@ No alert, portfolio-risk decision, order intent, approval, broker mutation, exec
 - `infrastructure/postgres/migrations/`: versioned application-owned market-data, signal, and portfolio schema
 - `infrastructure/`: pinned local services and operating notes
 - `docs/adr/`: accepted architecture decisions
+- `docs/planning/`: accepted MVP scope, current planning truth, and directional post-MVP roadmap
+- `user-stories/epics/`: product epics and delivery boundaries
 - `user-stories/notes/`: story validation and handoff notes
 
 Use the root commands rather than bypassing workspace checks:
@@ -104,17 +108,20 @@ Domain code must depend on application-owned interfaces rather than vendor SDK t
 
 ## Fast-path rules
 
-The market-event-to-alert path must remain deterministic and nonblocking:
+The accepted Phase 5 market-event-to-local-alert path must remain deterministic and nonblocking:
 
 ```text
 market event
   -> normalization
   -> feature update
   -> signal evaluation
-  -> portfolio context
-  -> risk evaluation
-  -> alert or order intent
+  -> alert eligibility
+  -> durable source receipt and immutable portfolio-context claim
+  -> alert materialization
+  -> local dashboard alert
 ```
+
+Invalid, stale, gapped, or suppressed market evidence prevents a new alert. Portfolio availability, freshness, selected reconciliation, latest-attempt lifecycle and reconciliation, calculation, membership, and support remain orthogonal; missing, stale, failed, incomplete, unsupported, or unavailable evidence never suppresses an otherwise eligible market alert. A failed latest Phase 4 attempt has reconciliation unavailable and never supplies holdings. Context selection is frozen from one terminal completed, validated Phase 4 current pointer at the first durable source receipt and never reselected on retry or correction. This MVP path performs no portfolio-risk evaluation and creates no order intent. A future decision path may add independent portfolio-risk evaluation and order intents only after explicit post-MVP authorization.
 
 - Do not call an LLM from this path.
 - Do not make synchronous news, filings, or research calls from this path.
@@ -123,6 +130,10 @@ market event
 - Preserve the raw provider timestamp, normalized event timestamp, and processing timestamp where relevant.
 - Make signal and risk-rule versions part of persisted results.
 - Measure latency at each boundary before attempting performance optimization.
+- Consume Phase 3 through its durable completed source cursor. A completed source ordinal may contain zero, one, or multiple transitions; record an audited no-op for zero and never confuse an incomplete upstream ordinal with a gap.
+- Keep global alert lineage/revision content separate from target-local live or replay instances, context claims, current projections, and disposition history.
+- Keep revision validity, current lineage projection, and local user disposition separate. Corrections append superseding, retracting, or reactivating evidence and never reset acknowledgement or dismissal.
+- Treat local acknowledge/dismiss commands as application-state mutations only. Browser writes go through the exact same-origin Next.js boundary defined by ADR 0016 before a bounded loopback Fastify call; no CORS or direct browser-to-Fastify write is allowed. Commands are versioned and idempotent and cannot reach a provider or broker.
 
 ## Execution model
 
@@ -301,7 +312,7 @@ Unless the user reprioritizes the roadmap, build the first vertical slice in thi
 6. Persist all evidence needed to explain and reproduce the signal.
 7. Replay a recorded session and verify identical output.
 8. Add paper-account synchronization and reconciliation.
-9. Add portfolio-aware alerts.
-10. Introduce order intents only after the preceding behavior is stable.
+9. Add the accepted local read-only portfolio-alert MVP without portfolio-risk decisions or broker writes.
+10. Introduce broader monitoring, evaluation, portfolio-risk alerts, and later non-executable order intents only through separately scoped post-MVP phases.
 
-Phase 2 completes the market-data foundation in steps 1-4 and the reusable market-data replay substrate in step 7. Phase 3 completes steps 5-7 for only `breakout_plus_volume.v1`; its credential-free Docker/PostgreSQL acceptance path and the separate P2-11 provider observation have passed. Phase 4 implements step 8 as read-only paper-account monitoring only. It does not authorize portfolio-aware alerts, risk decisions, order intents, execution, additional asset classes, sentiment analysis, or complex strategy work without an explicitly scoped later phase.
+Phase 2 completes the market-data foundation in steps 1-4 and the reusable market-data replay substrate in step 7. Phase 3 completes steps 5-7 for only `breakout_plus_volume.v1`; its credential-free Docker/PostgreSQL acceptance path and the separate P2-11 provider observation have passed. Phase 4 implements step 8 as read-only paper-account monitoring only, with P4-11 external evidence still pending. Accepted Phase 5 planning defines step 9 but implements none of it yet. It does not authorize external notifications, configurable assets, portfolio-risk decisions, order intents, execution, additional asset classes, sentiment analysis, or complex strategy work. The directional post-MVP sequence in `docs/planning/post-mvp-roadmap.md` requires explicit phase authorization, ADRs, stories, and exits before implementation.

@@ -71,3 +71,7 @@ P4-01 through P4-10 have completed implementation notes. The credential-free pac
 Phases 1-3 are complete: the safe foundation supports the exact AAPL/SPY market-data slice in ADRs 0006-0008 and the observation-only deterministic signal slice in ADRs 0009-0011. Market data and signal monitoring both default to disabled, and signal output remains an observation rather than a recommendation or position action.
 
 Phase 4 remains authorized only as the read-only portfolio-monitoring slice described by ADRs 0012-0014. It defaults to disabled, uses separate paper broker credentials, exposes only four accepted GET resources, preserves unsupported holdings and incomplete states, and keeps broker marks visibly distinct from Phase 2 market data. Its external phase exit remains pending P4-11. It does not authorize alerts, notifications, portfolio-risk decisions, order intents, approvals, broker mutations, execution, live brokerage, AI research, or later phases.
+
+## Phase 5: Local Read-Only Portfolio Alerts (Planned)
+
+The MVP-01 product scope, ADRs 0015-0016, and P5-01 through P5-09 are accepted planning artifacts only. No Phase 5 implementation note exists because no Phase 5 story has been implemented or validated. P4-11 remains an implementation and MVP-exit gate; accepted planning must not be described as runtime alert capability.

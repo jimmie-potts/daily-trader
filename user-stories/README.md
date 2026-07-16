@@ -169,3 +169,50 @@ Every story requires deterministic risk-based unit, adapter-contract, persistenc
 P4-01 through P4-10 are implemented and have story-level validation notes. Phase 4 is not yet fully exited: the separately credential-gated `npm run portfolio:provider-smoke` has not run against the explicitly expected paper account, so P4-11 remains open. Fixture success and the credential-free technical matrix must never be described as that external provider proof.
 
 When P4-11 is eligible to close, the provider smoke must confirm that the expected full paper account can be fetched through the accepted four-resource GET-only boundary and shut down cleanly, including a legitimately empty account. Alerts, notifications, portfolio-risk decisions, order intents, approvals, broker mutations, execution, live brokerage, AI research, additional asset support, currency conversion, backtesting, and performance claims remain out of scope.
+
+## Phase 5: Local Read-Only Portfolio Alerts (MVP)
+
+### Goal
+
+Deliver the accepted [`MVP-01`](./epics/mvp-01-local-read-only-portfolio-alerts.md) outcome: turn eligible on-time `breakout_plus_volume.v1` AAPL and SPY signal transitions into durable explainable local dashboard alerts, attach truthful creation-time portfolio context without using portfolio degradation to suppress a valid market alert, preserve correction and review history, and keep every broker boundary read-only with execution disabled.
+
+### Phase 4 Handoff and Implementation Gate
+
+Phase 5 planning is accepted, but implementation has not started. P4-01 through P4-10 supply the technical portfolio foundation. P4-11's separately credential-gated paper-account provider smoke must pass before P5-01 implementation begins and before Phase 5 or the MVP can exit. No fixture, prior technical matrix, or planning approval substitutes for that external evidence.
+
+ADRs 0015-0016 fix alert eligibility, atomic source-watermark cutover, revision/lineage correction semantics, orthogonal user state, durable portfolio-context selection, the exact same-origin Next-to-Fastify command boundary, and measurable latency/session exits. Accepted ADR status does not imply implementation.
+
+### Story Order
+
+| Story                                                         | Outcome                                                  | Depends on                 | Status  |
+| ------------------------------------------------------------- | -------------------------------------------------------- | -------------------------- | ------- |
+| [P5-01](./phase-5-01-alert-contracts-and-decisions.md)        | Versioned alert contracts and accepted decisions         | P3-09, P4-11 exit          | Planned |
+| [P5-02](./phase-5-02-safe-local-alert-configuration.md)       | Disabled-by-default fixed local alert configuration      | P5-01                      | Planned |
+| [P5-03](./phase-5-03-compose-explainable-portfolio-alerts.md) | Deterministic alert and portfolio-context composition    | P5-01, P5-02               | Planned |
+| [P5-04](./phase-5-04-persist-alert-history-and-actions.md)    | Append-only alert, correction, and review history        | P5-01, P5-03               | Planned |
+| [P5-05](./phase-5-05-process-signal-alerts.md)                | Durable recoverable signal-to-alert processing           | P5-02 through P5-04        | Planned |
+| [P5-06](./phase-5-06-local-alert-api.md)                      | Bounded local feed, detail, acknowledge, and dismiss API | P5-04, P5-05               | Planned |
+| [P5-07](./phase-5-07-dashboard-alert-experience.md)           | Minimal explainable dashboard alert workflow             | P5-06                      | Planned |
+| [P5-08](./phase-5-08-replay-alert-scenarios.md)               | Credential-free deterministic alert replay and restart   | P5-04, P5-05               | Planned |
+| [P5-09](./phase-5-09-phase-verification.md)                   | Reproducible technical and three-session MVP handoff     | P5-01 through P5-08, P4-11 | Planned |
+
+### Accepted MVP Boundary
+
+- One local, loopback-only, single-user installation with no login.
+- One expected Alpaca paper account; the broker adapter remains limited to its accepted four GET resources.
+- Fixed AAPL/XNAS and SPY/ARCX regular-session one-minute bars and `breakout_plus_volume.v1` only.
+- Dashboard-only alerts for held and not-held instruments.
+- Revision validity `active`, `superseded`, or `retracted`, a current lineage projection, and user disposition `new`, `acknowledged`, or `dismissed` remain separate.
+- Invalid, stale, gapped, or suppressed market evidence prevents a new alert. Portfolio availability, freshness, reconciliation, calculation, membership, and support are orthogonal and never hide an otherwise eligible alert.
+- Atomic start/stop source watermarks prevent backfill while preserving captured debt through retry and restart.
+- Immutable creation-time portfolio context, append-only history, deterministic replay/restart, and a p95 canonical-commit-to-dashboard objective at or below five seconds over at least 100 eligible samples. Lower latency is post-MVP work.
+
+### Definition of Done
+
+Every story requires deterministic risk-proportional unit, persistence, failure, API, presentation, replay, restart, security-boundary, and observability tests for its behavior. Normal CI and the technical verifier remain credential-free. No implementation note is created until the story and its dependencies pass.
+
+### MVP Exit
+
+Phase 5 and MVP-01 exit only after P4-11 closes, P5-01 through P5-09 have completed implementation notes, the credential-free technical matrix and accepted latency sample pass, and a separate local soak passes ADR 0016's criteria across three distinct complete regular core sessions. A naturally occurring live signal is not required because deterministic fixtures prove alert behavior while the soak proves external connectivity and operating continuity.
+
+Configurable symbols, watchlists, additional signals, external notifications, snooze, escalation, charts, rule editing, portfolio-risk decisions, recommendations, order intents, approvals, broker mutations, execution, hosted access, authentication, AI research, backtesting, and profitability claims remain post-MVP or excluded. See the [`post-MVP roadmap`](../docs/planning/post-mvp-roadmap.md).
